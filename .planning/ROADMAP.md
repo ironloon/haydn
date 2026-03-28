@@ -36,7 +36,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 2 plans
 Plans:
 - [x] 01-01-PLAN.md — VM core spec: computational model, instruction set, edge cases, event interface, loop state machine
-- [ ] 01-02-PLAN.md — Turing completeness proof, examples, and published specification document
+- [x] 01-02-PLAN.md — Turing completeness proof, examples, and published specification document
 
 ### Phase 2: VM Core
 **Goal**: Working stack-based virtual machine that correctly executes all Haydn instructions
