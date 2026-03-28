@@ -1,9 +1,12 @@
 # Haydn Language Specification
 
 **Version:** 1.0
-**Status:** Draft
+**Date:** 2026-03-28
+**License:** MIT
 
 > Haydn is an esoteric programming language where live musical performance IS the program.
+
+**Abstract.** Haydn is an esoteric programming language in which the performer's live musical input — via MIDI, microphone, or any event source — constitutes the program. This document specifies the Haydn virtual machine: a stack-based, event-driven computation engine with 19 opcodes, signed 64-bit integer values, addressable memory, and a loop pedal control flow model. Haydn is proven Turing-complete via reduction from Brainfuck. The VM is deterministic, never panics, and defines behavior for every edge case — because the performer's experience must be continuous.
 
 ## 1. Introduction
 
@@ -238,3 +241,253 @@ The following time-related features are explicitly deferred to a future version:
 - **Rhythm-pattern detection** (recognizing rhythmic patterns as compound operations)
 
 The optional metadata on events (§4.4) is the v1 hook for forward compatibility with these features.
+
+## 7. Turing Completeness
+
+### 7.1 Overview
+
+Haydn is Turing-complete. We prove this by showing that any Brainfuck program can be mechanically translated into a Haydn event sequence that produces identical I/O and halting behavior.
+
+### 7.2 Brainfuck Reference
+
+Brainfuck operates on a tape of integer cells (all initially `0`) with a movable data pointer (initially at cell `0`). It has 8 instructions:
+
+| BF Instruction | Semantics |
+|----------------|-----------|
+| `>` | Move data pointer one cell right |
+| `<` | Move data pointer one cell left |
+| `+` | Increment the cell at the data pointer |
+| `-` | Decrement the cell at the data pointer |
+| `.` | Output the byte value of the cell at the data pointer |
+| `,` | Read one byte of input into the cell at the data pointer |
+| `[` | If the cell at the data pointer is `0`, jump forward past the matching `]` |
+| `]` | If the cell at the data pointer is nonzero, jump back to the matching `[` |
+
+### 7.3 Compilation Convention
+
+The translation uses Haydn's addressable memory to simulate the BF tape:
+
+- **Pointer storage:** Haydn `memory[0]` holds the current BF data pointer value.
+- **Cell mapping:** BF cell `i` maps to Haydn `memory[i + 1]`. The offset of 1 reserves `memory[0]` for the pointer.
+- **Stack convention:** The stack is empty between BF instruction boundaries. Inside loops, a check value from `loop_start`'s peek may sit at the bottom of the stack — it does not interfere with operations, which only touch the top elements.
+- **Initialization:** The event sequence begins with `Push(1), Push(0), Op(store)`, which stores `1` at `memory[0]` — setting the data pointer to cell 0 (which is `memory[1]`).
+
+### 7.4 Instruction Mapping
+
+Each BF instruction compiles to a fixed Haydn event sequence. The `compile` function is total — every BF instruction has exactly one translation.
+
+| BF | Haydn Event Sequence | Description |
+|----|---------------------|-------------|
+| `>` | `Push(0), Op(load), Push(1), Op(add), Push(0), Op(store)` | Load pointer, increment, store back |
+| `<` | `Push(0), Op(load), Push(1), Op(sub), Push(0), Op(store)` | Load pointer, decrement, store back |
+| `+` | `Push(0), Op(load), Op(dup), Op(load), Push(1), Op(add), Op(swap), Op(store)` | Load pointer, load cell, increment cell, store cell |
+| `-` | `Push(0), Op(load), Op(dup), Op(load), Push(1), Op(sub), Op(swap), Op(store)` | Load pointer, load cell, decrement cell, store cell |
+| `.` | `Push(0), Op(load), Op(load), Op(print_char)` | Load pointer, load cell, print as byte |
+| `,` | `Push(0), Op(load), Op(read), Op(swap), Op(store)` | Load pointer, read input, store at cell |
+| `[` | `Push(0), Op(load), Op(load), Op(loop_start)` | Load pointer, load cell, loop_start peeks cell value |
+| `]` | `Push(0), Op(load), Op(load), Op(loop_end), Op(drop)` | Load pointer, load cell, loop_end pops cell value; drop cleans up `[`'s peek residue |
+
+**Compilation function:** Given a BF program string, `compile(program)` = `Push(1), Push(0), Op(store)` (setup) followed by the concatenation of each BF character's mapping from the table above, in order. Non-instruction characters are ignored (BF convention).
+
+### 7.5 Worked Example: BF `[-]`
+
+The BF program `[-]` sets the current cell to zero. Below is a complete trace assuming cell 0 initially contains `3`.
+
+**Setup:** `Push(1), Push(0), Op(store)` → `memory[0] = 1`, stack: `[]`
+
+**Pre-populate cell 0 with 3** (via three `+` instructions, abbreviated): After three applications of the `+` mapping, `memory[1] = 3`, stack: `[]`.
+
+**`[` mapping:** `Push(0), Op(load), Op(load), Op(loop_start)`
+
+| Step | Event | Stack | Note |
+|------|-------|-------|------|
+| 1 | `Push(0)` | `[0]` | |
+| 2 | `Op(load)` | `[1]` | Loads `memory[0]` = pointer = 1 |
+| 3 | `Op(load)` | `[3]` | Loads `memory[1]` = cell value = 3 |
+| 4 | `Op(loop_start)` | `[3]` | Peeks `3` ≠ 0 → enter Recording(1) |
+
+**`-` mapping (recorded and executed):** `Push(0), Op(load), Op(dup), Op(load), Push(1), Op(sub), Op(swap), Op(store)`
+
+| Step | Event | Stack | Note |
+|------|-------|-------|------|
+| 5 | `Push(0)` | `[3, 0]` | Recorded |
+| 6 | `Op(load)` | `[3, 1]` | Loads pointer. Recorded |
+| 7 | `Op(dup)` | `[3, 1, 1]` | Recorded |
+| 8 | `Op(load)` | `[3, 1, 3]` | Loads cell value. Recorded |
+| 9 | `Push(1)` | `[3, 1, 3, 1]` | Recorded |
+| 10 | `Op(sub)` | `[3, 1, 2]` | 3 − 1 = 2. Recorded |
+| 11 | `Op(swap)` | `[3, 2, 1]` | Recorded |
+| 12 | `Op(store)` | `[3]` | Stores 2 at `memory[1]`. Recorded |
+
+**`]` mapping (recorded except `loop_end` and `drop`):**
+
+| Step | Event | Stack | Note |
+|------|-------|-------|------|
+| 13 | `Push(0)` | `[3, 0]` | Recorded |
+| 14 | `Op(load)` | `[3, 1]` | Loads pointer. Recorded |
+| 15 | `Op(load)` | `[3, 2]` | Loads cell value (now 2). Recorded |
+| 16 | `Op(loop_end)` | `[3]` | Pops `2` ≠ 0 → Replaying(1, 0). NOT recorded |
+| 17 | `Op(drop)` | — | Queued (live input queued during replay) |
+
+**Buffer contents:** `[Push(0), Op(load), Op(dup), Op(load), Push(1), Op(sub), Op(swap), Op(store), Push(0), Op(load), Op(load)]`
+
+**Replay iteration 1:** Stack starts at `[3]`. Body decrements `memory[1]` from 2 to 1. End-of-buffer pops `1` (the cell value loaded by the last two events in the buffer) — nonzero → replay again. Stack: `[3]`.
+
+**Replay iteration 2:** Body decrements `memory[1]` from 1 to 0. End-of-buffer pops `0` → exit loop. Stack: `[3]`. State returns to Normal.
+
+**Queued `Op(drop)` executes:** Stack `[3]` → `[]`.
+
+**Result:** `memory[1] = 0`. Cell zeroed. Stack empty. ✓
+
+### 7.6 Loop Mechanics in the Reduction
+
+**Skip path (`[` when cell is zero):** `loop_start` peeks `0` and skips to after the matching `loop_end`, scanning the event stream and accounting for nested `loop_start`/`loop_end` pairs. The `Op(drop)` that follows `loop_end` in the `]` mapping is the first event after the skip — it drops the stale `0` from `[`'s peek, restoring the stack to empty.
+
+**Nested loops:** Inner `[`/`]` pairs create nested Recording/Replaying states via the loop stack. Each level's `Op(drop)` cleans up its own peek residue. The BF nesting structure maps directly to Haydn's loop nesting.
+
+### 7.7 Proof Argument
+
+**Totality.** All 8 BF instructions have a defined, fixed-length mapping in the table above. The `compile` function is total.
+
+**I/O Preservation.** BF `.` maps to `Op(print_char)` applied to the cell value — identical byte output. BF `,` maps to `Op(read)` — identical byte input. Haydn's `read` returns `0` when no input is available, consistent with the standard BF "0 on EOF" convention.
+
+**Halting Preservation.** BF `[`/`]` maps to `loop_start`/`loop_end` with while-loop semantics (§5). Entry condition: cell at pointer is zero → skip (equivalent to BF `[` skipping when cell is 0). Continuation condition: cell at pointer is nonzero → replay (equivalent to BF `]` jumping back when cell is nonzero). Loop termination occurs under identical conditions in both languages.
+
+**Value Range.** BF conventionally uses byte-sized cells (0–255). Haydn uses `i64`. The reduction is valid because: (a) the standard BF Turing completeness proof uses unbounded integer cells, (b) Haydn's `i64` range (−2⁶³ to 2⁶³−1) is a strict superset of any practical BF cell range, and (c) `print_char` applies `% 256`, preserving BF's byte output semantics.
+
+**Conclusion.** Since Brainfuck is Turing-complete and every Brainfuck program mechanically compiles to a Haydn event sequence with identical I/O and halting behavior, **Haydn is Turing-complete**. ∎
+
+## 8. Examples
+
+The following examples show Haydn event sequences with step-by-step stack traces. These are raw VM-level programs — in practice, a performer would never construct these event sequences manually; they would emerge from playing a musical instrument through a tuning file.
+
+### 8.1 Hello — Push and Print
+
+Print the string "Hello" by pushing ASCII values and printing each as a character.
+
+**Event sequence:**
+
+```
+Push(72), Op(print_char),
+Push(101), Op(print_char),
+Push(108), Op(print_char),
+Push(108), Op(print_char),
+Push(111), Op(print_char)
+```
+
+**Trace:**
+
+| Step | Event | Stack | Output |
+|------|-------|-------|--------|
+| 1 | `Push(72)` | `[72]` | |
+| 2 | `Op(print_char)` | `[]` | `H` (72 % 256 = 72 = 'H') |
+| 3 | `Push(101)` | `[101]` | |
+| 4 | `Op(print_char)` | `[]` | `e` |
+| 5 | `Push(108)` | `[108]` | |
+| 6 | `Op(print_char)` | `[]` | `l` |
+| 7 | `Push(108)` | `[108]` | |
+| 8 | `Op(print_char)` | `[]` | `l` |
+| 9 | `Push(111)` | `[111]` | |
+| 10 | `Op(print_char)` | `[]` | `o` |
+
+**Output:** `Hello`
+
+### 8.2 Arithmetic — Add Two Numbers
+
+Push 3 and 4, add them, print the result as a number.
+
+**Event sequence:**
+
+```
+Push(3), Push(4), Op(add), Op(print_num)
+```
+
+**Trace:**
+
+| Step | Event | Stack | Output |
+|------|-------|-------|--------|
+| 1 | `Push(3)` | `[3]` | |
+| 2 | `Push(4)` | `[3, 4]` | |
+| 3 | `Op(add)` | `[7]` | |
+| 4 | `Op(print_num)` | `[]` | `7` |
+
+**Output:** `7`
+
+### 8.3 Countdown Loop
+
+Count down from 5 to 1, printing each number on a new line, using the loop pedal mechanism.
+
+**Event sequence:**
+
+```
+Push(5),
+Op(loop_start),
+  Op(dup), Op(print_num),
+  Push(10), Op(print_char),
+  Push(1), Op(sub),
+  Op(dup),
+Op(loop_end)
+```
+
+**Trace (first iteration — recording pass):**
+
+| Step | Event | Stack | Output | Recorded? |
+|------|-------|-------|--------|-----------|
+| 1 | `Push(5)` | `[5]` | | No |
+| 2 | `Op(loop_start)` | `[5]` | | No — peeks `5` ≠ 0, enters Recording(1) |
+| 3 | `Op(dup)` | `[5, 5]` | | Yes |
+| 4 | `Op(print_num)` | `[5]` | `5` | Yes |
+| 5 | `Push(10)` | `[5, 10]` | | Yes |
+| 6 | `Op(print_char)` | `[5]` | `\n` | Yes |
+| 7 | `Push(1)` | `[5, 1]` | | Yes |
+| 8 | `Op(sub)` | `[4]` | | Yes |
+| 9 | `Op(dup)` | `[4, 4]` | | Yes |
+| 10 | `Op(loop_end)` | `[4]` | | No — pops `4` ≠ 0 → Replaying(1, 0) |
+
+**Buffer:** `[Op(dup), Op(print_num), Push(10), Op(print_char), Push(1), Op(sub), Op(dup)]`
+
+**Replay iterations:**
+
+| Iteration | Stack at start | Prints | Cell value after sub | End-of-buffer check |
+|-----------|---------------|--------|---------------------|-------------------|
+| 2 | `[4]` | `4\n` | 3 | Pop `3` ≠ 0 → replay |
+| 3 | `[3]` | `3\n` | 2 | Pop `2` ≠ 0 → replay |
+| 4 | `[2]` | `2\n` | 1 | Pop `1` ≠ 0 → replay |
+| 5 | `[1]` | `1\n` | 0 | Pop `0` = 0 → exit loop |
+
+**Final stack:** `[0]`
+
+**Output:**
+```
+5
+4
+3
+2
+1
+```
+
+## 9. Specification Summary
+
+| Property | Value |
+|----------|-------|
+| **Opcodes** | 19 (`dup`, `swap`, `drop`, `rotate`, `add`, `sub`, `mul`, `div`, `mod`, `eq`, `gt`, `lt`, `loop_start`, `loop_end`, `print_num`, `print_char`, `read`, `store`, `load`) |
+| **Event types** | 2: `Push(value: i64)`, `Op(opcode: Opcode)` |
+| **Value type** | `i64` — signed 64-bit integer, wrapping arithmetic |
+| **Stack** | Unbounded LIFO, initially empty |
+| **Memory** | Addressable `i64` array, indexed by non-negative `i64`, initially all zeros |
+| **Control flow** | Loop-based only — no jumps, no goto, no instruction pointer |
+| **Turing complete** | Yes — via Brainfuck reduction (§7) |
+| **Error handling** | All edge cases produce defined, deterministic results. The VM never panics. |
+| **Timing** | None — purely event-driven, no internal clock |
+| **Input model** | Event stream of `Push` and `Op` events, source-independent |
+
+### Design Principles
+
+1. **The stream of events IS the program.** There is no stored program, no instruction pointer, no program counter.
+2. **The VM is source-independent.** MIDI, microphone, test harness, or file — all produce identical behavior for identical event sequences.
+3. **The VM never crashes.** Every edge case (empty stack, division by zero, invalid address, unmatched loop boundaries) has a defined result. The performer's experience is continuous.
+4. **Music is art.** The VM is a fixed computation engine; the musical mapping is configurable via tuning files. Different instruments and styles produce different programs from the same gestures.
+
+---
+
+*Haydn Language Specification v1.0 — 2026*
