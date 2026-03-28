@@ -47,7 +47,10 @@ Plans:
   2. Edge cases (stack underflow, division by zero, invalid memory access, empty stack) are handled gracefully per the language spec — no panics
   3. Control flow (jumps, conditionals, loops) works correctly under the live-input execution model defined in Phase 1
   4. VM can be driven by synthetic instruction sequences in unit tests, validating every opcode independently
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [x] 02-01-PLAN.md — Types + VM struct + all 17 non-loop opcodes with tests
+- [ ] 02-02-PLAN.md — Loop pedal state machine + integration tests + BF validation
 
 ### Phase 3: Tuning System
 **Goal**: Configurable tuning files that map musical events to VM instructions, with a working piano default
