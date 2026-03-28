@@ -12,18 +12,17 @@ The live performance IS the program. Music becomes computation in real time, wit
 
 ### Validated
 
-(None yet — ship to validate)
+- [x] Full language specification document — Validated in Phase 1: language-specification
+- [x] Stack-based virtual machine executes Haydn instructions (Turing-complete) — Specified in Phase 1 (implementation in Phase 2)
+- [x] Instruction set: dup, swap, drop, rotate, add, sub, mul, div, mod, eq, gt, lt, loop_start, loop_end, print_num, print_char, read, store, load — Validated in Phase 1: 19 opcodes fully specified
 
 ### Active
 
 - [ ] Real-time MIDI input captures note events and maps to language operations
 - [ ] Real-time microphone input analyzes pitch/onset and maps to language operations
-- [ ] Stack-based virtual machine executes Haydn instructions (Turing-complete)
 - [ ] Configurable "tuning files" map musical gestures to VM opcodes (different instruments/styles)
-- [ ] Instruction set: push, add, sub, mul, div, mod, dup, swap, drop, rotate, eq, gt, lt, jump, conditional, loop, print num, print char, read, store, load
 - [ ] CLI visualization displays stack state, current operation, and output during performance
 - [ ] Continuous real-time interpretation — every musical event triggers immediate execution
-- [ ] Full language specification document
 - [ ] Fun, inspiring README in the tradition of great esolangs (esolang wiki style)
 - [ ] Example programs: Hello World, FizzBuzz, and other classic demos performed musically
 - [ ] Default tuning files for common instruments (keyboard, voice, guitar)
@@ -83,4 +82,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-03-28 after initialization*
+*Last updated: 2026-03-28 after Phase 1 (language-specification) completion*
