@@ -8,6 +8,8 @@ use anyhow::Result;
 use clap::Parser;
 use midir::MidiInput;
 
+use haydn::{MidiMsg, midi_callback, note_name, process_note, format_session_summary};
+
 #[derive(Parser, Debug)]
 #[command(name = "haydn", about = "Haydn — an esoteric programming language performed by music")]
 struct Cli {
@@ -22,43 +24,6 @@ struct Cli {
     /// Path to a tuning file (.toml). Defaults to built-in piano tuning.
     #[arg(long)]
     tuning: Option<std::path::PathBuf>,
-}
-
-const NOTE_NAMES: [&str; 12] = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
-
-fn note_name(midi: u8) -> String {
-    let name = NOTE_NAMES[(midi % 12) as usize];
-    let octave = (midi as i16 / 12) - 1;
-    format!("{}{}", name, octave)
-}
-
-#[derive(Debug)]
-enum MidiMsg {
-    NoteOn { note: u8, velocity: u8 },
-    NoteOff { note: u8 },
-}
-
-fn midi_callback(_timestamp: u64, message: &[u8], tx: &mut mpsc::Sender<MidiMsg>) {
-    if let Ok(event) = midly::live::LiveEvent::parse(message) {
-        if let midly::live::LiveEvent::Midi { message: msg, .. } = event {
-            match msg {
-                midly::MidiMessage::NoteOn { key, vel } => {
-                    if vel.as_int() == 0 {
-                        let _ = tx.send(MidiMsg::NoteOff { note: key.as_int() });
-                    } else {
-                        let _ = tx.send(MidiMsg::NoteOn {
-                            note: key.as_int(),
-                            velocity: vel.as_int(),
-                        });
-                    }
-                }
-                midly::MidiMessage::NoteOff { key, .. } => {
-                    let _ = tx.send(MidiMsg::NoteOff { note: key.as_int() });
-                }
-                _ => {}
-            }
-        }
-    }
 }
 
 fn select_midi_port(
@@ -163,42 +128,6 @@ fn wait_for_reconnect(
     }
 }
 
-fn print_event_log(note: u8, velocity: u8, result: &haydn_vm::StepResult) {
-    use haydn_vm::{Event, Operation};
-
-    let mapping = match &result.operation {
-        Operation::Pushed(v) => format!("Push({})", v),
-        Operation::Executed(op) => format!("Op({:?})", op),
-        Operation::LoopEntered => "LoopEntered".to_string(),
-        Operation::LoopSkipped => "LoopSkipped".to_string(),
-        Operation::LoopExited => "LoopExited".to_string(),
-        Operation::LoopReplaying => "LoopReplaying".to_string(),
-        Operation::ReplayStep(evt) => match evt {
-            Event::Push(v) => format!("Replay(Push({}))", v),
-            Event::Op(op) => format!("Replay(Op({:?}))", op),
-        },
-        Operation::EndOfBufferReplay => "EndOfBufferReplay".to_string(),
-        Operation::EndOfBufferExit => "EndOfBufferExit".to_string(),
-        Operation::Noop => "Noop".to_string(),
-    };
-
-    let stack = format!("{:?}", result.stack_snapshot);
-    let mut line = format!("[{} v={}] → {}  |  Stack: {}", note_name(note), velocity, mapping, stack);
-
-    if let Some(ref output) = result.output {
-        if !output.is_empty() {
-            let text = String::from_utf8_lossy(output);
-            line.push_str(&format!("  |  Out: \"{}\"", text));
-        }
-    }
-
-    if let Some(ref ec) = result.edge_case {
-        line.push_str(&format!("  |  ⚠ {:?}", ec));
-    }
-
-    println!("{}", line);
-}
-
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -253,16 +182,8 @@ fn main() -> Result<()> {
     while running.load(Ordering::Relaxed) {
         match rx.recv_timeout(Duration::from_millis(500)) {
             Ok(MidiMsg::NoteOn { note, velocity }) => {
-                match engine.map_note(note) {
-                    Some(event) => {
-                        let results = vm.process_event(event);
-                        for result in &results {
-                            print_event_log(note, velocity, result);
-                        }
-                    }
-                    None => {
-                        println!("[{} v={}] → (unmapped)", note_name(note), velocity);
-                    }
+                for line in process_note(note, velocity, &mut engine, &mut vm) {
+                    println!("{}", line);
                 }
             }
             Ok(MidiMsg::NoteOff { note }) => {
@@ -295,15 +216,7 @@ fn main() -> Result<()> {
     }
 
     vm.close();
-    println!("\n─── Session Summary ───");
-    println!("Final stack ({} items): {:?}", vm.stack().len(), vm.stack());
-    if !vm.output().is_empty() {
-        match std::str::from_utf8(vm.output()) {
-            Ok(s) => println!("Program output: {}", s),
-            Err(_) => println!("Program output (bytes): {:?}", vm.output()),
-        }
-    }
-    println!("───────────────────────");
+    println!("\n{}", format_session_summary(&vm));
 
     Ok(())
 }
