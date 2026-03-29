@@ -85,6 +85,7 @@ pub(crate) struct LoopFrame {
 pub(crate) struct ReplayFrame {
     pub(crate) buffer: Vec<Event>,
     pub(crate) position: usize,
+    pub(crate) parent_loop_depth: usize,
 }
 
 impl ReplayFrame {

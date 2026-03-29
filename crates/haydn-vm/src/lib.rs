@@ -5,6 +5,7 @@
 
 mod types;
 mod opcodes;
+mod loop_machine;
 pub use types::*;
 
 use std::collections::{HashMap, VecDeque};
@@ -41,93 +42,47 @@ impl HaydnVm {
     }
 
     pub fn step(&mut self) -> Option<StepResult> {
-        // If replaying, get next event from replay buffer
-        if self.loop_state == LoopState::Replaying {
-            if let Some(frame) = self.replay_stack.last_mut() {
-                if frame.at_end() {
-                    // End of buffer — check stack top to decide replay vs exit
-                    let top = self.stack.last().copied().unwrap_or(0);
-                    if top != 0 {
-                        // Replay again
-                        frame.reset();
-                        let event = *frame.current()?;
-                        return Some(self.execute_event(event));
-                    } else {
-                        // Exit loop
-                        self.replay_stack.pop();
-                        if !self.replay_stack.is_empty() {
-                            self.loop_state = LoopState::Replaying;
-                        } else if !self.loop_stack.is_empty() {
-                            self.loop_state = LoopState::Recording;
-                        } else {
-                            self.loop_state = LoopState::Normal;
-                        }
-                        // Process queued events if back to normal
-                        if self.loop_state == LoopState::Normal || self.loop_state == LoopState::Recording {
-                            return self.step();
-                        }
-                        return None;
-                    }
-                } else {
-                    let event = *frame.current()?;
-                    frame.advance();
-                    return Some(self.execute_event(event));
-                }
+        // Phase 1: Check replay buffer end-of-buffer
+        if let Some(frame) = self.replay_stack.last() {
+            if frame.at_end() {
+                return Some(loop_machine::handle_end_of_buffer(self));
             }
         }
 
-        // If skipping, consume events looking for matching loop_end
+        // Phase 2: Get next event from source
+        let event = if let Some(frame) = self.replay_stack.last_mut() {
+            // Reading from replay buffer
+            let e = *frame.current()?;
+            frame.advance();
+            e
+        } else {
+            // Normal/Recording/Skip: from event queue
+            self.event_queue.pop_front()?
+        };
+
+        // Phase 3: Handle skip mode
         if self.skip_depth > 0 {
-            let event = self.event_queue.pop_front()?;
-            match event {
-                Event::Op(Opcode::LoopStart) => {
-                    self.skip_depth += 1;
-                }
-                Event::Op(Opcode::LoopEnd) => {
-                    self.skip_depth -= 1;
-                    if self.skip_depth == 0 {
-                        // Back to previous state
-                        if !self.loop_stack.is_empty() {
-                            self.loop_state = LoopState::Recording;
-                        } else {
-                            self.loop_state = LoopState::Normal;
-                        }
-                    }
-                }
-                _ => {}
-            }
-            return Some(StepResult {
-                event,
-                operation: Operation::Noop,
-                stack_snapshot: self.stack.clone(),
-                output: None,
-                edge_case: None,
-            });
+            return Some(loop_machine::handle_skip(self, event));
         }
 
-        // Normal/recording: dequeue from event_queue
-        let event = self.event_queue.pop_front()?;
-
-        // If recording, append event to current loop buffer (except LoopEnd which is handled separately)
-        if self.loop_state == LoopState::Recording {
-            match event {
-                Event::Op(Opcode::LoopEnd) => {
-                    // Don't record loop_end — handle it specially
-                }
-                Event::Op(Opcode::LoopStart) => {
-                    // Record it in parent buffer, then handle
-                    if let Some(frame) = self.loop_stack.last_mut() {
-                        frame.buffer.push(event);
-                    }
-                }
-                _ => {
-                    if let Some(frame) = self.loop_stack.last_mut() {
-                        frame.buffer.push(event);
-                    }
-                }
+        // Phase 4: Handle loop opcodes
+        match event {
+            Event::Op(Opcode::LoopStart) => {
+                return Some(loop_machine::handle_loop_start(self, event));
             }
+            Event::Op(Opcode::LoopEnd) => {
+                return Some(loop_machine::handle_loop_end(self, event));
+            }
+            _ => {}
         }
 
+        // Phase 5: Record in active loop frames (skip parents of active replay)
+        let base = self.recording_base();
+        for frame in &mut self.loop_stack[base..] {
+            frame.buffer.push(event);
+        }
+
+        // Phase 6: Execute
         Some(self.execute_event(event))
     }
 
@@ -152,6 +107,21 @@ impl HaydnVm {
         &self.stack
     }
 
+    pub fn close(&mut self) {
+        self.loop_stack.clear();
+        self.replay_stack.clear();
+        self.loop_state = LoopState::Normal;
+        self.skip_depth = 0;
+    }
+
+    /// Returns the loop_stack index below which recording should be skipped.
+    /// During replay, events should only be recorded in loop frames created
+    /// *after* the current replay started, not in pre-existing parent frames
+    /// that already contain those events from the original recording pass.
+    pub(crate) fn recording_base(&self) -> usize {
+        self.replay_stack.last().map(|f| f.parent_loop_depth).unwrap_or(0)
+    }
+
     fn execute_event(&mut self, event: Event) -> StepResult {
         match event {
             Event::Push(value) => {
@@ -165,7 +135,7 @@ impl HaydnVm {
                 }
             }
             Event::Op(Opcode::LoopStart) | Event::Op(Opcode::LoopEnd) => {
-                // Stub for Plan 02 — returns Noop
+                // Should not reach here — handled in step() via loop_machine
                 StepResult {
                     event,
                     operation: Operation::Noop,
