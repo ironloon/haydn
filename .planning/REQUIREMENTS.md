@@ -44,7 +44,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **MIDI-01**: Real-time MIDI input captures note-on/note-off events from any connected MIDI device
 - [x] **MIDI-02**: MIDI note events map to language operations via the active tuning file
 - [x] **MIDI-03**: MIDI input latency is imperceptible during live performance (<5ms)
-- [ ] **MIDI-04**: Graceful handling of MIDI device connection/disconnection
+- [x] **MIDI-04**: Graceful handling of MIDI device connection/disconnection
 
 ### Audio Input
 
@@ -152,7 +152,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | MIDI-01 | Phase 4 | Complete |
 | MIDI-02 | Phase 4 | Complete |
 | MIDI-03 | Phase 4 | Complete |
-| MIDI-04 | Phase 4 | Pending |
+| MIDI-04 | Phase 4 | Complete |
 | AUD-01 | Phase 6 | Pending |
 | AUD-02 | Phase 6 | Pending |
 | AUD-03 | Phase 6 | Pending |

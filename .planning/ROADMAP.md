@@ -98,7 +98,7 @@ Plans:
 **Plans**: 2 plans
 Plans:
 - [x] 04-01-PLAN.md — MIDI capture + full tuning→VM→event log pipeline (happy path)
-- [ ] 04-02-PLAN.md — Disconnect/reconnect resilience + Ctrl+C shutdown + human verification
+- [x] 04-02-PLAN.md — Disconnect/reconnect resilience + Ctrl+C shutdown + human verification
 
 ### Phase 5: CLI Visualization
 **Goal**: Real-time terminal display of VM state so performers can see what their music is computing
