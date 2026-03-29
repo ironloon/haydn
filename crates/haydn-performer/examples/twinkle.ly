@@ -2,9 +2,13 @@
 % Traditional melody (18th century, public domain)
 % Also known as "Ah! vous dirai-je, Maman"
 
+\mp
 c4 c g' g | a a g2 |
 f4 f e e | d d c2 |
+\mf
 g'4 g f f | e e d2 |
 g4 g f f | e e d2 |
+\p
 c4 c g' g | a a g2 |
+\rit
 f4 f e e | d d c2 |

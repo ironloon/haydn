@@ -19,31 +19,83 @@ pub enum ParseError {
 #[derive(Debug, Clone)]
 struct PartialNote {
     midi_note: u8,
-    duration_value: u32,
-    dotted: bool,
+    duration: Duration,
     tied: bool,
     velocity: u8,
+}
+
+/// Gradual expression mode — applied per note until cancelled.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum GradualMode {
+    None,
+    Crescendo,
+    Decrescendo,
+    Ritardando,
+    Accelerando,
 }
 
 /// Parse state tracking default duration for carry-forward.
 struct ParseState {
     default_duration: u32,
-    bpm: u32,
+    bpm: f64,
+    current_velocity: u8,
+    gradual_mode: GradualMode,
+    tempo_multiplier: f64,
 }
 
 impl ParseState {
     fn new(bpm: u32) -> Self {
         Self {
             default_duration: 4,
-            bpm,
+            bpm: bpm as f64,
+            current_velocity: 80,
+            gradual_mode: GradualMode::None,
+            tempo_multiplier: 1.0,
         }
     }
 
     fn duration_to_ms(&self, value: u32, dotted: bool) -> Duration {
-        let quarter_ms = 60_000.0 / self.bpm as f64;
+        let quarter_ms = 60_000.0 / self.bpm;
         let base_ms = quarter_ms * (4.0 / value as f64);
         let ms = if dotted { base_ms * 1.5 } else { base_ms };
+        let ms = ms * self.tempo_multiplier;
         Duration::from_micros((ms * 1000.0) as u64)
+    }
+
+    /// Apply gradual changes per note (cresc/decresc adjust velocity, rit/accel adjust tempo).
+    fn apply_gradual(&mut self) {
+        match self.gradual_mode {
+            GradualMode::Crescendo => {
+                self.current_velocity = (self.current_velocity as u16 + 4).min(127) as u8;
+            }
+            GradualMode::Decrescendo => {
+                self.current_velocity = (self.current_velocity as i16 - 4).max(16) as u8;
+            }
+            GradualMode::Ritardando => {
+                self.tempo_multiplier *= 1.03; // each note ~3% slower
+            }
+            GradualMode::Accelerando => {
+                self.tempo_multiplier *= 0.97; // each note ~3% faster
+            }
+            GradualMode::None => {}
+        }
+    }
+
+    /// Map a dynamic marking to a velocity value.
+    fn dynamic_to_velocity(dynamic: &str) -> Option<u8> {
+        match dynamic {
+            "ppp" => Some(16),
+            "pp" => Some(33),
+            "p" => Some(49),
+            "mp" => Some(64),
+            "mf" => Some(80),
+            "f" => Some(96),
+            "ff" => Some(112),
+            "fff" => Some(127),
+            "sfz" | "sf" => Some(120),
+            "fp" => Some(96), // forte then piano — apply forte, next note reverts
+            _ => None,
+        }
     }
 }
 
@@ -151,23 +203,23 @@ fn skip_ws_and_comments(mut input: &str) -> &str {
 #[derive(Debug, Clone)]
 enum PartialOrRest {
     Note(PartialNote),
-    Rest(u32, bool),
+    Rest(Duration),
 }
 
-fn resolve_ties(partials: &[PartialOrRest], state: &ParseState) -> Result<NoteSequence, ParseError> {
+fn resolve_ties(partials: &[PartialOrRest]) -> Result<NoteSequence, ParseError> {
     let mut result = Vec::new();
     let mut i = 0;
 
     while i < partials.len() {
         match &partials[i] {
-            PartialOrRest::Rest(dur_val, dotted) => {
+            PartialOrRest::Rest(duration) => {
                 result.push(ScoreEvent::Rest(RestEvent {
-                    duration: state.duration_to_ms(*dur_val, *dotted),
+                    duration: *duration,
                 }));
                 i += 1;
             }
             PartialOrRest::Note(note) => {
-                let mut total_duration = state.duration_to_ms(note.duration_value, note.dotted);
+                let mut total_duration = note.duration;
                 let midi = note.midi_note;
                 let velocity = note.velocity;
                 let mut tied = note.tied;
@@ -179,7 +231,7 @@ fn resolve_ties(partials: &[PartialOrRest], state: &ParseState) -> Result<NoteSe
                     }
                     match &partials[i] {
                         PartialOrRest::Note(next) if next.midi_note == midi => {
-                            total_duration += state.duration_to_ms(next.duration_value, next.dotted);
+                            total_duration += next.duration;
                             tied = next.tied;
                         }
                         _ => {
@@ -208,10 +260,17 @@ fn resolve_ties(partials: &[PartialOrRest], state: &ParseState) -> Result<NoteSe
 /// Uses absolute mode: `c` = C3 (MIDI 48), `c'` = C4 (MIDI 60).
 /// Duration carry-forward: notes without explicit duration inherit from previous.
 /// Ties combine durations of consecutive notes with the same pitch.
+///
+/// Supported directives (LilyPond-style):
+/// - Dynamics: `\ppp`, `\pp`, `\p`, `\mp`, `\mf`, `\f`, `\ff`, `\fff`, `\sfz`
+/// - Gradual dynamics: `\cresc`, `\decresc`, `\dim`
+/// - Tempo: `\tempo N` (changes BPM mid-stream)
+/// - Gradual tempo: `\rit`, `\accel`, `\atempo` (resets tempo multiplier)
 pub fn parse(input: &str, bpm: u32) -> Result<NoteSequence, ParseError> {
     let mut state = ParseState::new(bpm);
     let mut partials: Vec<PartialOrRest> = Vec::new();
     let mut remaining = input;
+    let mut fp_pending = false; // for \fp: next note after forte reverts to piano
 
     loop {
         remaining = skip_ws_and_comments(remaining);
@@ -226,13 +285,95 @@ pub fn parse(input: &str, bpm: u32) -> Result<NoteSequence, ParseError> {
             continue;
         }
 
+        // Try directive (\command)
+        if remaining.starts_with('\\') {
+            let directive_text = &remaining[1..];
+            // Extract the command word
+            let end = directive_text
+                .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                .unwrap_or(directive_text.len());
+            let command = &directive_text[..end];
+            remaining = &directive_text[end..];
+
+            // Check for dynamics
+            if let Some(vel) = ParseState::dynamic_to_velocity(command) {
+                if command == "fp" {
+                    state.current_velocity = vel; // forte for this note
+                    fp_pending = true;
+                } else {
+                    state.current_velocity = vel;
+                    // Explicit dynamic cancels gradual dynamic changes
+                    if matches!(
+                        state.gradual_mode,
+                        GradualMode::Crescendo | GradualMode::Decrescendo
+                    ) {
+                        state.gradual_mode = GradualMode::None;
+                    }
+                }
+                continue;
+            }
+
+            match command {
+                "tempo" => {
+                    // Parse BPM number after \tempo
+                    let after = remaining.trim_start();
+                    let num_end = after
+                        .find(|c: char| !c.is_ascii_digit())
+                        .unwrap_or(after.len());
+                    if num_end > 0 {
+                        if let Ok(new_bpm) = after[..num_end].parse::<u32>() {
+                            state.bpm = new_bpm as f64;
+                            state.tempo_multiplier = 1.0; // reset tempo multiplier on explicit tempo
+                            state.gradual_mode = match state.gradual_mode {
+                                GradualMode::Ritardando | GradualMode::Accelerando => {
+                                    GradualMode::None
+                                }
+                                other => other,
+                            };
+                        }
+                        remaining = &after[num_end..];
+                    }
+                }
+                "cresc" | "crescendo" => {
+                    state.gradual_mode = GradualMode::Crescendo;
+                }
+                "decresc" | "decrescendo" | "dim" => {
+                    state.gradual_mode = GradualMode::Decrescendo;
+                }
+                "rit" | "ritardando" => {
+                    state.gradual_mode = GradualMode::Ritardando;
+                }
+                "accel" | "accelerando" => {
+                    state.gradual_mode = GradualMode::Accelerando;
+                }
+                "atempo" | "a_tempo" => {
+                    state.tempo_multiplier = 1.0;
+                    state.gradual_mode = match state.gradual_mode {
+                        GradualMode::Ritardando | GradualMode::Accelerando => GradualMode::None,
+                        other => other,
+                    };
+                }
+                _ => {
+                    // Unknown directive — skip silently (LilyPond has many we don't support)
+                }
+            }
+            continue;
+        }
+
         // Try rest
         if let Ok((rest, (dur, dotted))) = rest_event(remaining) {
             let dur_val = dur.unwrap_or(state.default_duration);
             if dur.is_some() {
                 state.default_duration = dur_val;
             }
-            partials.push(PartialOrRest::Rest(dur_val, dotted));
+            partials.push(PartialOrRest::Rest(state.duration_to_ms(dur_val, dotted)));
+            // Rests contribute to gradual tempo changes
+            if matches!(
+                state.gradual_mode,
+                GradualMode::Ritardando | GradualMode::Accelerando
+            ) {
+                state.apply_gradual();
+            }
             remaining = rest;
             continue;
         }
@@ -246,13 +387,19 @@ pub fn parse(input: &str, bpm: u32) -> Result<NoteSequence, ParseError> {
             let midi = compute_midi(semitone, acc, oct).map_err(|_| {
                 ParseError::InvalidInput(remaining[..remaining.len().min(20)].to_string())
             })?;
+            let velocity = state.current_velocity;
+            let duration = state.duration_to_ms(dur_val, dotted);
             partials.push(PartialOrRest::Note(PartialNote {
                 midi_note: midi,
-                duration_value: dur_val,
-                dotted,
+                duration,
                 tied,
-                velocity: 80,
+                velocity,
             }));
+            state.apply_gradual();
+            if fp_pending {
+                state.current_velocity = 49; // revert to piano after \fp note
+                fp_pending = false;
+            }
             remaining = rest;
             continue;
         }
@@ -262,8 +409,7 @@ pub fn parse(input: &str, bpm: u32) -> Result<NoteSequence, ParseError> {
         ));
     }
 
-    let state_for_dur = ParseState::new(bpm);
-    resolve_ties(&partials, &state_for_dur)
+    resolve_ties(&partials)
 }
 
 #[cfg(test)]
@@ -537,6 +683,130 @@ mod tests {
         let result = parse("c'16", BPM).unwrap();
         match &result[0] {
             ScoreEvent::Note(n) => assert_eq!(n.duration, Duration::from_millis(125)),
+            _ => panic!("expected note"),
+        }
+    }
+
+    #[test]
+    fn test_dynamic_forte() {
+        let result = parse("\\f c'4 d'4", BPM).unwrap();
+        assert_eq!(result.len(), 2);
+        match &result[0] {
+            ScoreEvent::Note(n) => assert_eq!(n.velocity, 96),
+            _ => panic!("expected note"),
+        }
+        match &result[1] {
+            ScoreEvent::Note(n) => assert_eq!(n.velocity, 96),
+            _ => panic!("expected note"),
+        }
+    }
+
+    #[test]
+    fn test_dynamic_piano() {
+        let result = parse("\\p c'4", BPM).unwrap();
+        match &result[0] {
+            ScoreEvent::Note(n) => assert_eq!(n.velocity, 49),
+            _ => panic!("expected note"),
+        }
+    }
+
+    #[test]
+    fn test_dynamic_change_mid_stream() {
+        let result = parse("\\p c'4 \\f d'4", BPM).unwrap();
+        assert_eq!(result.len(), 2);
+        match &result[0] {
+            ScoreEvent::Note(n) => assert_eq!(n.velocity, 49),
+            _ => panic!("expected note"),
+        }
+        match &result[1] {
+            ScoreEvent::Note(n) => assert_eq!(n.velocity, 96),
+            _ => panic!("expected note"),
+        }
+    }
+
+    #[test]
+    fn test_crescendo_increases_velocity() {
+        let result = parse("\\p \\cresc c'4 d' e' f'", BPM).unwrap();
+        assert_eq!(result.len(), 4);
+        let velocities: Vec<u8> = result
+            .iter()
+            .map(|e| match e {
+                ScoreEvent::Note(n) => n.velocity,
+                _ => 0,
+            })
+            .collect();
+        // First note at piano (49), then each gets +4
+        assert_eq!(velocities[0], 49);
+        assert!(velocities[1] > velocities[0]);
+        assert!(velocities[2] > velocities[1]);
+        assert!(velocities[3] > velocities[2]);
+    }
+
+    #[test]
+    fn test_decrescendo_decreases_velocity() {
+        let result = parse("\\f \\decresc c'4 d' e' f'", BPM).unwrap();
+        let velocities: Vec<u8> = result
+            .iter()
+            .map(|e| match e {
+                ScoreEvent::Note(n) => n.velocity,
+                _ => 0,
+            })
+            .collect();
+        assert_eq!(velocities[0], 96);
+        assert!(velocities[1] < velocities[0]);
+        assert!(velocities[2] < velocities[1]);
+    }
+
+    #[test]
+    fn test_tempo_change() {
+        // At 120 BPM a quarter = 500ms, at 60 BPM a quarter = 1000ms
+        let result = parse("c'4 \\tempo 60 d'4", BPM).unwrap();
+        assert_eq!(result.len(), 2);
+        match &result[0] {
+            ScoreEvent::Note(n) => assert_eq!(n.duration, Duration::from_millis(500)),
+            _ => panic!("expected note"),
+        }
+        match &result[1] {
+            ScoreEvent::Note(n) => assert_eq!(n.duration, Duration::from_millis(1000)),
+            _ => panic!("expected note"),
+        }
+    }
+
+    #[test]
+    fn test_ritardando_slows_notes() {
+        let result = parse("\\rit c'4 d' e' f'", BPM).unwrap();
+        let durations: Vec<Duration> = result
+            .iter()
+            .map(|e| match e {
+                ScoreEvent::Note(n) => n.duration,
+                ScoreEvent::Rest(r) => r.duration,
+            })
+            .collect();
+        // Each note should be progressively longer
+        assert!(durations[1] > durations[0]);
+        assert!(durations[2] > durations[1]);
+        assert!(durations[3] > durations[2]);
+    }
+
+    #[test]
+    fn test_atempo_resets_ritardando() {
+        let result = parse("\\rit c'4 d' \\atempo e'4 f'", BPM).unwrap();
+        match &result[2] {
+            ScoreEvent::Note(n) => assert_eq!(n.duration, Duration::from_millis(500)),
+            _ => panic!("expected note"),
+        }
+        match &result[3] {
+            ScoreEvent::Note(n) => assert_eq!(n.duration, Duration::from_millis(500)),
+            _ => panic!("expected note"),
+        }
+    }
+
+    #[test]
+    fn test_unknown_directive_ignored() {
+        let result = parse("\\relative c'4", BPM).unwrap();
+        assert_eq!(result.len(), 1);
+        match &result[0] {
+            ScoreEvent::Note(n) => assert_eq!(n.midi_note, 60), // c' = C4
             _ => panic!("expected note"),
         }
     }
