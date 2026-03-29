@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/haydn", "crates/haydn-vm"]
+resolver = "2"

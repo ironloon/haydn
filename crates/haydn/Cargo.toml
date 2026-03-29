@@ -1,0 +1,9 @@
+[package]
+name = "haydn"
+version = "0.0.1"
+edition = "2021"
+description = "Haydn — an esoteric programming language performed by music"
+license = "MIT"
+repository = "https://github.com/jwgeller/haydn"
+keywords = ["esoteric", "programming-language", "music"]
+categories = ["compilers"]
