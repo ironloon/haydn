@@ -97,7 +97,7 @@ Plans:
   4. Disconnecting or reconnecting a MIDI device is handled gracefully without crashing
 **Plans**: 2 plans
 Plans:
-- [ ] 04-01-PLAN.md — MIDI capture + full tuning→VM→event log pipeline (happy path)
+- [x] 04-01-PLAN.md — MIDI capture + full tuning→VM→event log pipeline (happy path)
 - [ ] 04-02-PLAN.md — Disconnect/reconnect resilience + Ctrl+C shutdown + human verification
 
 ### Phase 5: CLI Visualization
