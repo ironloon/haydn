@@ -11,6 +11,7 @@
 pub enum Instrument {
     Piano,
     Strings,
+    Cello,
     Flute,
     Organ,
     Clarinet,
@@ -86,7 +87,7 @@ impl Instrument {
                 articulation_gap_ms: 10.0,
             },
             Instrument::Strings => InstrumentProfile {
-                // Strings: rich overtones, slow bow
+                // Strings ensemble: rich overtones, slow bow
                 harmonics: &[1.0, 0.7, 0.45, 0.35, 0.25, 0.18, 0.12, 0.08, 0.05, 0.03],
                 attack_ms: 80.0,
                 decay_ms: 60.0,
@@ -94,8 +95,8 @@ impl Instrument {
                 release_ms: 250.0,
                 adsr_curve: 1.5,       // gentle curve — bowed entry
                 vibrato_rate: 5.0,
-                vibrato_depth: 0.003,
-                vibrato_onset_ms: 350.0,
+                vibrato_depth: 0.0012,
+                vibrato_onset_ms: 500.0,
                 tremolo_rate: 0.0,
                 tremolo_depth: 0.0,
                 attack_brightness: 1.8,  // bow scratch brightens initial contact
@@ -104,6 +105,28 @@ impl Instrument {
                 attack_noise_ms: 60.0,
                 noise_highpass: 0.5,
                 articulation_gap_ms: 5.0,  // legato-ish
+            },
+            Instrument::Cello => InstrumentProfile {
+                // Cello: bowed string produces sawtooth-like waveform (all harmonics, ~1/n decay)
+                // Strong low partials give warmth; gradual rolloff gives richness
+                // Extended to 16 harmonics for the characteristic "body" of the cello
+                harmonics: &[1.0, 0.90, 0.65, 0.50, 0.38, 0.28, 0.22, 0.17, 0.13, 0.10, 0.08, 0.06, 0.05, 0.04, 0.03, 0.025],
+                attack_ms: 100.0,        // bow draw is slow and gradual
+                decay_ms: 40.0,
+                sustain_level: 0.92,     // very strong sustained bowed tone
+                release_ms: 300.0,       // bow lift — gradual, not abrupt
+                adsr_curve: 1.2,         // nearly linear — bow pressure is smooth
+                vibrato_rate: 5.8,       // typical cello vibrato ~5.5-6Hz
+                vibrato_depth: 0.0005,   // very narrow: ~±0.08 semitone — barely perceptible pitch shift
+                vibrato_onset_ms: 800.0, // cellists wait almost a full second before adding vibrato
+                tremolo_rate: 0.0,
+                tremolo_depth: 0.0,
+                attack_brightness: 1.3,  // very subtle — bow catches string gently
+                brightness_decay_ms: 150.0,  // long mellow-out
+                attack_noise: 0.025,     // very light rosin whisper
+                attack_noise_ms: 80.0,   // spread over longer window
+                noise_highpass: 0.25,    // low, warm rosin character
+                articulation_gap_ms: 2.0,  // nearly seamless legato
             },
             Instrument::Flute => InstrumentProfile {
                 // Flute: nearly sinusoidal
@@ -114,8 +137,8 @@ impl Instrument {
                 release_ms: 120.0,
                 adsr_curve: 1.8,
                 vibrato_rate: 5.5,
-                vibrato_depth: 0.003,
-                vibrato_onset_ms: 200.0,
+                vibrato_depth: 0.001,
+                vibrato_onset_ms: 300.0,
                 tremolo_rate: 0.0,
                 tremolo_depth: 0.0,
                 attack_brightness: 2.5,  // breathy onset is bright
@@ -174,8 +197,8 @@ impl Instrument {
                 release_ms: 120.0,
                 adsr_curve: 2.5,        // punchy attack
                 vibrato_rate: 5.0,
-                vibrato_depth: 0.002,
-                vibrato_onset_ms: 400.0,
+                vibrato_depth: 0.001,
+                vibrato_onset_ms: 500.0,
                 tremolo_rate: 0.0,
                 tremolo_depth: 0.0,
                 attack_brightness: 3.5,  // very bright brass buzz
@@ -276,6 +299,7 @@ mod tests {
         let instruments = [
             Instrument::Piano,
             Instrument::Strings,
+            Instrument::Cello,
             Instrument::Flute,
             Instrument::Organ,
             Instrument::Clarinet,

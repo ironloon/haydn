@@ -40,6 +40,9 @@ pub struct ExpressiveSource {
     velocity_scale: f32,
     vibrato: Lfo,
     tremolo: Lfo,
+    /// Slow LFO that modulates vibrato depth — makes vibrato "breathe"
+    /// so long notes don't sound like a machine wobble.
+    vibrato_breath: Lfo,
     sample_index: u64,
     total_samples: u64,
     vibrato_onset_samples: u64,
@@ -96,6 +99,17 @@ impl ExpressiveSource {
             Lfo::new(0.0, 0.0, sample_rate)
         };
 
+        // Slow "breathing" LFO modulates vibrato depth.
+        // Two superimposed rates create an organic, non-periodic feel:
+        // the primary breath cycle (~0.13 Hz = ~8sec) is amplitude-modulated
+        // by a secondary drift (~0.07 Hz = ~14sec) so it never repeats exactly.
+        // Depth 0.4 means vibrato swings between ~20-100% of max.
+        let vibrato_breath = if profile.vibrato_depth > 0.0 {
+            Lfo::new(0.13, 0.4, sample_rate)
+        } else {
+            Lfo::new(0.0, 0.0, sample_rate)
+        };
+
         let tremolo = if profile.tremolo_depth > 0.0 {
             Lfo::new(profile.tremolo_rate, profile.tremolo_depth, sample_rate)
         } else {
@@ -112,6 +126,7 @@ impl ExpressiveSource {
             amplitude,
             velocity_scale: velocity as f32 / 127.0,
             vibrato,
+            vibrato_breath,
             tremolo,
             sample_index: 0,
             total_samples,
@@ -145,12 +160,20 @@ impl Iterator for ExpressiveSource {
         let vibrato_raw = self.vibrato.sample();
         let tremolo_mod = self.tremolo.sample();
 
-        // Fade vibrato in over onset period
+        // Breathing modulation: vibrato depth varies organically.
+        // breath_raw ranges from -0.4 to +0.4; we shift to 0.6..1.4, clamp to 0.2..1.0
+        // so vibrato sometimes nearly disappears, sometimes reaches full depth.
+        let breath_raw = self.vibrato_breath.sample();
+        let breath_scale = (1.0 + breath_raw).max(0.2).min(1.0);
+
+        // Fade vibrato in over onset period — use a smooth ease-in (squared) curve
+        // so it doesn't suddenly "turn on"
         let vibrato_mod = if self.vibrato_onset_samples > 0 && self.sample_index < self.vibrato_onset_samples {
-            let fade = self.sample_index as f32 / self.vibrato_onset_samples as f32;
-            vibrato_raw * fade
+            let t = self.sample_index as f32 / self.vibrato_onset_samples as f32;
+            let fade = t * t; // quadratic ease-in
+            vibrato_raw * fade * breath_scale
         } else {
-            vibrato_raw
+            vibrato_raw * breath_scale
         };
 
         let frequency = self.base_frequency * (1.0 + vibrato_mod);

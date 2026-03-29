@@ -1,12 +1,13 @@
 % Nimrod — Variation IX from Enigma Variations
 % Edward Elgar (1899, public domain)
-% The noble, slowly rising theme — play at --bpm 52 for full effect
+% The noble, slowly rising theme — Adagio
 
-\pp \cresc
-ees4 f g aes | bes g aes2 |
+\tempo 52
+\pp
+ees2 f | g2 aes | \cresc bes2 g | aes1 |
 \mf
-bes4 c' bes aes | g f ees2 |
+bes2 c' | bes2 aes | g2 f | ees1 |
 \cresc
-ees4 f g aes | \f bes c' bes aes |
+ees2 f | g2 aes | \f bes2 c' | bes2 aes |
 \ff
-g4 aes bes aes | \decresc g f ees2~ | \p ees1 |
+g2 aes | bes2 aes | \decresc g2 f | ees1~ | \p ees1 |
