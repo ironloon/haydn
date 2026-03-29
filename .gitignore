@@ -1,6 +1,9 @@
 # Build artifacts
 /target/
 
+# GSD planning artifacts
+.planning/
+
 # Environment
 .env
 
