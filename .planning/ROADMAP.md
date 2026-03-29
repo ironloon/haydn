@@ -84,7 +84,7 @@ Plans:
 - [x] 03.1-01-PLAN.md — Crate scaffold + LilyPond subset parser with nom
 - [x] 03.1-02-PLAN.md — Built-in synthesis (L0-L1) + CLI + audio playback
 - [x] 03.1-03-PLAN.md — Rich synthesis (L2-L3) + SoundFont backend (L4)
-- [ ] 03.1-04-PLAN.md — MIDI output (L5) + TUI display + example scores
+- [x] 03.1-04-PLAN.md — MIDI output (L5) + TUI display + example scores
 
 ### Phase 4: MIDI Input Pipeline
 **Goal**: First end-to-end playable experience — MIDI keyboard notes become live computation
