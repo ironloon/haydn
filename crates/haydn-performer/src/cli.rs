@@ -14,8 +14,12 @@ pub enum SynthType {
     about = "Play LilyPond notation through synthesized audio"
 )]
 pub struct Cli {
-    /// Path to a LilyPond (.ly) score file
-    pub score: PathBuf,
+    /// Path to a LilyPond (.ly) score file (not needed with --test-audio)
+    pub score: Option<PathBuf>,
+
+    /// Run audio diagnostic: plays a test tone through each fidelity level
+    #[arg(long)]
+    pub test_audio: bool,
 
     /// Synthesis backend
     #[arg(long, default_value = "builtin", value_enum)]
