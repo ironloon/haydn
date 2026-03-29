@@ -52,4 +52,20 @@ pub struct Cli {
     /// Quiet mode — play audio without TUI display
     #[arg(long, short)]
     pub quiet: bool,
+
+    /// List available audio input/output devices and exit
+    #[arg(long)]
+    pub list_devices: bool,
+
+    /// Output audio device (substring match; use --list-devices to see options)
+    #[arg(long)]
+    pub output_device: Option<String>,
+
+    /// Input audio device for loopback test (substring match)
+    #[arg(long)]
+    pub input_device: Option<String>,
+
+    /// Playback volume (0.0 to 1.0, default 1.0)
+    #[arg(long, default_value_t = 1.0)]
+    pub volume: f32,
 }

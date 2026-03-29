@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use clap::Parser;
+use cpal::traits::{DeviceTrait, HostTrait};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -8,14 +9,28 @@ mod cli;
 fn main() -> Result<()> {
     let args = cli::Cli::parse();
 
+    // --list-devices: enumerate audio devices and exit
+    if args.list_devices {
+        return list_audio_devices();
+    }
+
+    // Validate volume range
+    if args.volume < 0.0 || args.volume > 1.0 {
+        bail!("--volume must be between 0.0 and 1.0 (got {})", args.volume);
+    }
+
     // --test-audio: diagnostic mode that plays test tones through speakers
     if args.test_audio {
-        return run_audio_test();
+        return run_audio_test(args.output_device.as_deref(), args.volume);
     }
 
     // --test-loopback: play tone + record via mic to verify end-to-end audio
     if args.test_loopback {
-        return run_loopback_test();
+        return run_loopback_test(
+            args.output_device.as_deref(),
+            args.input_device.as_deref(),
+            args.volume,
+        );
     }
 
     let score_path = args
@@ -57,14 +72,30 @@ fn main() -> Result<()> {
     match args.synth {
         cli::SynthType::Builtin => {
             let backend = haydn_performer::synth::builtin::BuiltinSynth::new(args.fidelity);
-            play_with_display(&backend, &sequence, synth_name, args.bpm, args.quiet)?;
+            play_with_display(
+                &backend,
+                &sequence,
+                synth_name,
+                args.bpm,
+                args.quiet,
+                args.output_device.as_deref(),
+                args.volume,
+            )?;
         }
         cli::SynthType::Soundfont => {
             let sf_path = args
                 .soundfont
                 .ok_or_else(|| anyhow::anyhow!("--soundfont path required for soundfont backend"))?;
             let backend = haydn_performer::synth::soundfont::SoundFontSynth::new(sf_path);
-            play_with_display(&backend, &sequence, synth_name, args.bpm, args.quiet)?;
+            play_with_display(
+                &backend,
+                &sequence,
+                synth_name,
+                args.bpm,
+                args.quiet,
+                args.output_device.as_deref(),
+                args.volume,
+            )?;
         }
         cli::SynthType::Midi => {
             if let Some(ref midi_out) = args.midi_out {
@@ -92,10 +123,12 @@ fn play_with_display(
     backend_name: &str,
     bpm: u32,
     quiet: bool,
+    output_device_name: Option<&str>,
+    volume: f32,
 ) -> Result<()> {
-    let (_stream, stream_handle) =
-        rodio::OutputStream::try_default().context("Failed to open audio output device")?;
+    let (_stream, stream_handle) = open_output(output_device_name)?;
     let sink = rodio::Sink::try_new(&stream_handle).context("Failed to create audio sink")?;
+    sink.set_volume(volume);
 
     let source = backend.synthesize(sequence, 44100);
     sink.append(source);
@@ -132,9 +165,128 @@ fn play_with_display(
     Ok(())
 }
 
+/// List all available audio input and output devices.
+fn list_audio_devices() -> Result<()> {
+    let host = cpal::default_host();
+
+    eprintln!("=== Audio Devices ===\n");
+
+    // Output devices
+    let default_out = host.default_output_device();
+    let default_out_name = default_out
+        .as_ref()
+        .and_then(|d| d.name().ok())
+        .unwrap_or_default();
+
+    eprintln!("Output devices:");
+    match host.output_devices() {
+        Ok(devices) => {
+            let mut count = 0;
+            for device in devices {
+                let name = device.name().unwrap_or_else(|_| "unknown".into());
+                let marker = if name == default_out_name { " (default)" } else { "" };
+                eprintln!("  - {}{}", name, marker);
+                count += 1;
+            }
+            if count == 0 {
+                eprintln!("  (none found)");
+            }
+        }
+        Err(e) => eprintln!("  Error enumerating: {}", e),
+    }
+
+    eprintln!();
+
+    // Input devices
+    let default_in = host.default_input_device();
+    let default_in_name = default_in
+        .as_ref()
+        .and_then(|d| d.name().ok())
+        .unwrap_or_default();
+
+    eprintln!("Input devices:");
+    match host.input_devices() {
+        Ok(devices) => {
+            let mut count = 0;
+            for device in devices {
+                let name = device.name().unwrap_or_else(|_| "unknown".into());
+                let marker = if name == default_in_name { " (default)" } else { "" };
+                eprintln!("  - {}{}", name, marker);
+                count += 1;
+            }
+            if count == 0 {
+                eprintln!("  (none found)");
+            }
+        }
+        Err(e) => eprintln!("  Error enumerating: {}", e),
+    }
+
+    eprintln!("\nUse --output-device \"<name>\" or --input-device \"<name>\" to select.");
+    eprintln!("Partial name matches work (e.g. --output-device \"Headphones\").");
+
+    Ok(())
+}
+
+/// Open an audio output stream, optionally targeting a named device.
+fn open_output(device_name: Option<&str>) -> Result<(rodio::OutputStream, rodio::OutputStreamHandle)> {
+    match device_name {
+        Some(name) => {
+            let host = cpal::default_host();
+            let device = host
+                .output_devices()
+                .context("Failed to enumerate output devices")?
+                .find(|d| {
+                    d.name()
+                        .map(|n| n.to_lowercase().contains(&name.to_lowercase()))
+                        .unwrap_or(false)
+                })
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "No output device matching \"{}\". Use --list-devices to see available devices.",
+                        name
+                    )
+                })?;
+            let actual_name = device.name().unwrap_or_else(|_| "unknown".into());
+            eprintln!("  Using output device: {}", actual_name);
+            rodio::OutputStream::try_from_device(&device)
+                .context(format!("Failed to open output device \"{}\"", actual_name))
+        }
+        None => rodio::OutputStream::try_default().context("Failed to open default audio output"),
+    }
+}
+
+/// Find an input device by name substring, or fall back to default.
+fn find_input_device(device_name: Option<&str>) -> Result<cpal::Device> {
+    let host = cpal::default_host();
+    match device_name {
+        Some(name) => {
+            let device = host
+                .input_devices()
+                .context("Failed to enumerate input devices")?
+                .find(|d| {
+                    d.name()
+                        .map(|n| n.to_lowercase().contains(&name.to_lowercase()))
+                        .unwrap_or(false)
+                })
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "No input device matching \"{}\". Use --list-devices to see available devices.",
+                        name
+                    )
+                })?;
+            let actual_name = device.name().unwrap_or_else(|_| "unknown".into());
+            eprintln!("  Using input device: {}", actual_name);
+            Ok(device)
+        }
+        None => host
+            .default_input_device()
+            .ok_or_else(|| anyhow::anyhow!("No microphone / input device found")),
+    }
+}
+
 /// Audio diagnostic: plays a recognizable tone through each fidelity level
 /// so you can verify your speakers/headphones actually produce sound.
-fn run_audio_test() -> Result<()> {
+fn run_audio_test(output_device: Option<&str>, volume: f32) -> Result<()> {
     use haydn_performer::synth::SynthBackend;
     use haydn_performer::types::{NoteEvent, RestEvent, ScoreEvent};
     use std::time::Duration;
@@ -143,8 +295,7 @@ fn run_audio_test() -> Result<()> {
     eprintln!("You should hear 4 test tones, each with a different timbre.");
     eprintln!("If you hear nothing, check your system volume and audio output device.\n");
 
-    let (_stream, stream_handle) =
-        rodio::OutputStream::try_default().context("Failed to open audio output device")?;
+    let (_stream, stream_handle) = open_output(output_device)?;
 
     // C major triad (C4-E4-G4) at each fidelity level
     let test_sequence: Vec<ScoreEvent> = vec![
@@ -169,6 +320,7 @@ fn run_audio_test() -> Result<()> {
 
         let sink = rodio::Sink::try_new(&stream_handle)
             .context("Failed to create audio sink")?;
+        sink.set_volume(volume);
         sink.append(source);
         sink.sleep_until_end();
 
@@ -192,8 +344,12 @@ fn run_audio_test() -> Result<()> {
 /// default microphone, then checks whether the mic captured the expected frequency.
 ///
 /// Requirements: speakers + microphone active (not headphones-only).
-fn run_loopback_test() -> Result<()> {
-    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+fn run_loopback_test(
+    output_device: Option<&str>,
+    input_device_name: Option<&str>,
+    volume: f32,
+) -> Result<()> {
+    use cpal::traits::{DeviceTrait, StreamTrait};
     use std::sync::Mutex;
     use std::time::Duration;
 
@@ -206,10 +362,7 @@ fn run_loopback_test() -> Result<()> {
     eprintln!("Make sure speakers + mic are active (not just headphones).\n");
 
     // --- Set up mic recording ---
-    let host = cpal::default_host();
-    let input_device = host
-        .default_input_device()
-        .ok_or_else(|| anyhow::anyhow!("No microphone / input device found"))?;
+    let input_device = find_input_device(input_device_name)?;
 
     let input_name = input_device.name().unwrap_or_else(|_| "unknown".into());
     eprintln!("  Mic: {}", input_name);
@@ -270,9 +423,9 @@ fn run_loopback_test() -> Result<()> {
 
     // --- Play 440Hz tone ---
     eprintln!("  Playing 440Hz test tone for {:.0}s...", PLAY_SECS);
-    let (_stream, stream_handle) =
-        rodio::OutputStream::try_default().context("Failed to open audio output")?;
+    let (_stream, stream_handle) = open_output(output_device)?;
     let sink = rodio::Sink::try_new(&stream_handle)?;
+    sink.set_volume(volume);
 
     let tone = haydn_performer::synth::sine::SineSource::new(
         TEST_FREQ,
