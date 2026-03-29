@@ -33,6 +33,14 @@ pub struct Cli {
     #[arg(long)]
     pub soundfont: Option<PathBuf>,
 
+    /// Write MIDI output to this file instead of playing audio (--synth midi)
+    #[arg(long)]
+    pub midi_out: Option<PathBuf>,
+
+    /// Send MIDI to this named port (--synth midi, auto-detect if not set)
+    #[arg(long)]
+    pub midi_port: Option<String>,
+
     /// Quiet mode — play audio without TUI display
     #[arg(long, short)]
     pub quiet: bool,
