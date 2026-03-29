@@ -171,6 +171,35 @@ Note: Phase 6 can begin after Phase 2 (parallel with Phases 3-5 if desired).
 | 8. Example Programs & Content | 0/0 | Not started | - |
 | 9. Distribution & Release | 0/0 | Not started | - |
 
+## Backlog
+
+### Phase 999.1: Human Voice Synthesis (BACKLOG)
+
+**Goal:** Real-time human voice simulation engine — formant synthesis, vowel/consonant modeling, and expressive vocal parameters (vibrato, breathiness, chest/head register). Initially standalone, then integrated as a performer synth backend. Could also serve as a general-purpose vocal synthesis library for other projects.
+
+**Context & Notes:**
+- Formant synthesis (parallel/cascade resonator banks) is the classic approach — models the vocal tract as a set of tunable bandpass filters
+- Key formants: F1 (jaw openness, 200-800Hz), F2 (tongue position, 600-2500Hz), F3 (lip rounding, 1800-3500Hz)
+- Vowel space: each vowel maps to specific F1/F2/F3 frequencies (e.g., /a/ ≈ 730/1090/2440, /i/ ≈ 270/2290/3010)
+- Consonants need noise generators (fricatives), transient bursts (plosives), nasal resonators
+- Expressive parameters: vibrato rate/depth, breathiness (noise mix), register (chest vs head), glottal pulse shape
+- Modern alternative: neural TTS (Tacotron/VITS) — much more realistic but heavyweight, GPU-dependent
+- Middle ground: rustysynth choir patches (GM 52-54) provide basic vocal sounds via SoundFont now
+- For the Haydn performer specifically: voice synth would let users hear what their sung programs "should" sound like
+- Potential standalone crate: `haydn-voice` or `formant-synth` — useful beyond this project
+
+**Research Areas:**
+- Klatt synthesizer algorithm (classic formant synthesis, well-documented)
+- WORLD vocoder (Rust bindings exist?) — analysis/synthesis of voice parameters
+- Fox/Praat formant extraction for reference data
+- Real-time constraints: can formant synthesis run at audio rate (44.1kHz) without glitches?
+
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd-review-backlog when ready)
+
 ---
 *Roadmap created: 2026-03-28*
-*Last updated: 2026-03-28*
+*Last updated: 2026-03-29*
