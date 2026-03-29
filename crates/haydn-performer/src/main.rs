@@ -21,9 +21,11 @@ fn main() -> Result<()> {
             cli::SynthType::Builtin => match args.fidelity {
                 0 => "built-in (sine)",
                 1 => "built-in (sine + ADSR)",
+                2 => "built-in (waveform + ADSR)",
+                3 => "built-in (expressive)",
                 _ => "built-in",
             },
-            cli::SynthType::Soundfont => "soundfont",
+            cli::SynthType::Soundfont => "soundfont (SF2)",
             cli::SynthType::Midi => "midi",
         };
         eprintln!(
@@ -40,7 +42,11 @@ fn main() -> Result<()> {
             play_audio(&backend, &sequence)?;
         }
         cli::SynthType::Soundfont => {
-            bail!("SoundFont synthesis not yet implemented (coming in Plan 03)");
+            let sf_path = args
+                .soundfont
+                .ok_or_else(|| anyhow::anyhow!("--soundfont path required for soundfont backend"))?;
+            let backend = haydn_performer::synth::soundfont::SoundFontSynth::new(sf_path);
+            play_audio(&backend, &sequence)?;
         }
         cli::SynthType::Midi => {
             bail!("MIDI output not yet implemented (coming in Plan 04)");

@@ -1,54 +1,25 @@
+use crate::synth::expressive::ExpressiveSource;
 use crate::synth::sine::{midi_to_freq, SilenceSource, SineSource};
+use crate::synth::waveform::WaveformSource;
 use crate::synth::SynthBackend;
 use crate::types::{NoteSequence, ScoreEvent};
-use std::time::Duration;
 
 use super::adsr::AdsrEnvelope;
 
 /// Built-in synthesizer with configurable fidelity.
 /// - Fidelity 0: Pure sine waves
 /// - Fidelity 1: Sine + ADSR envelope (default)
+/// - Fidelity 2: Blended waveforms + ADSR (richer timbre)
+/// - Fidelity 3: Expressive (vibrato, velocity) + waveforms + ADSR
 pub struct BuiltinSynth {
     pub fidelity: u8,
 }
 
 impl BuiltinSynth {
     pub fn new(fidelity: u8) -> Self {
-        Self { fidelity }
-    }
-}
-
-/// A source that applies an ADSR envelope to a sine wave.
-struct AdsrSineSource {
-    sine: SineSource,
-    envelope: AdsrEnvelope,
-}
-
-impl Iterator for AdsrSineSource {
-    type Item = f32;
-
-    fn next(&mut self) -> Option<f32> {
-        let sample = self.sine.next()?;
-        let amp = self.envelope.amplitude();
-        Some(sample * amp)
-    }
-}
-
-impl rodio::Source for AdsrSineSource {
-    fn current_frame_len(&self) -> Option<usize> {
-        self.sine.current_frame_len()
-    }
-
-    fn channels(&self) -> u16 {
-        1
-    }
-
-    fn sample_rate(&self) -> u32 {
-        self.sine.sample_rate()
-    }
-
-    fn total_duration(&self) -> Option<Duration> {
-        self.sine.total_duration()
+        Self {
+            fidelity: fidelity.min(3),
+        }
     }
 }
 
@@ -61,7 +32,6 @@ impl SynthBackend for BuiltinSynth {
         let fidelity = self.fidelity;
         let sr = sample_rate;
 
-        // Pre-render all events into a Vec<f32> buffer
         let mut buffer: Vec<f32> = Vec::new();
 
         for event in sequence {
@@ -70,18 +40,44 @@ impl SynthBackend for BuiltinSynth {
                     let freq = midi_to_freq(note.midi_note);
                     let velocity_scale = note.velocity as f32 / 127.0;
 
-                    if fidelity >= 1 {
-                        // ADSR-shaped sine
-                        let mut sine =
-                            SineSource::new(freq, note.duration, sr, velocity_scale);
-                        let mut env = AdsrEnvelope::piano(note.duration, sr);
-                        while let Some(sample) = sine.next() {
-                            buffer.push(sample * env.amplitude());
+                    match fidelity {
+                        0 => {
+                            // Raw sine
+                            let sine = SineSource::new(freq, note.duration, sr, velocity_scale);
+                            buffer.extend(sine);
                         }
-                    } else {
-                        // Raw sine
-                        let sine = SineSource::new(freq, note.duration, sr, velocity_scale);
-                        buffer.extend(sine);
+                        1 => {
+                            // Sine + ADSR
+                            let mut sine = SineSource::new(freq, note.duration, sr, velocity_scale);
+                            let mut env = AdsrEnvelope::piano(note.duration, sr);
+                            while let Some(sample) = sine.next() {
+                                buffer.push(sample * env.amplitude());
+                            }
+                        }
+                        2 => {
+                            // Waveform blend + ADSR
+                            let mut waveform =
+                                WaveformSource::new(freq, note.duration, sr, velocity_scale);
+                            let mut env = AdsrEnvelope::piano(note.duration, sr);
+                            while let Some(sample) = waveform.next() {
+                                buffer.push(sample * env.amplitude());
+                            }
+                        }
+                        3 => {
+                            // Expressive (vibrato + velocity) + waveform + ADSR
+                            let mut expressive = ExpressiveSource::new(
+                                freq,
+                                note.duration,
+                                sr,
+                                1.0,
+                                note.velocity,
+                            );
+                            let mut env = AdsrEnvelope::piano(note.duration, sr);
+                            while let Some(sample) = expressive.next() {
+                                buffer.push(sample * env.amplitude());
+                            }
+                        }
+                        _ => unreachable!(),
                     }
                 }
                 ScoreEvent::Rest(rest) => {
@@ -98,6 +94,8 @@ impl SynthBackend for BuiltinSynth {
         match self.fidelity {
             0 => "built-in (sine)",
             1 => "built-in (sine + ADSR)",
+            2 => "built-in (waveform + ADSR)",
+            3 => "built-in (expressive)",
             _ => "built-in",
         }
     }
@@ -107,6 +105,7 @@ impl SynthBackend for BuiltinSynth {
 mod tests {
     use super::*;
     use crate::types::{NoteEvent, RestEvent};
+    use std::time::Duration;
 
     #[test]
     fn test_builtin_synth_produces_audio() {

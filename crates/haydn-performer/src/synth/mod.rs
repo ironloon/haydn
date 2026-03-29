@@ -1,6 +1,9 @@
 pub mod adsr;
 pub mod builtin;
+pub mod expressive;
 pub mod sine;
+pub mod soundfont;
+pub mod waveform;
 
 use crate::types::NoteSequence;
 

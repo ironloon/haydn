@@ -16,3 +16,4 @@ thiserror = "2"
 rodio = "0.20"
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
+rustysynth = "1.3"
