@@ -1,0 +1,15 @@
+[package]
+name = "haydn-performer"
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/jaredwray/haydn"
+description = "Simulated performer for the Haydn esoteric programming language"
+
+[[bin]]
+name = "haydn-performer"
+path = "src/main.rs"
+
+[dependencies]
+nom = "8"
+thiserror = "2"
