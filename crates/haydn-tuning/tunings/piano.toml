@@ -1,0 +1,28 @@
+[metadata]
+name = "Default Piano"
+root_note = 60
+instrument = "piano"
+
+[values]
+range = [36, 59]
+
+[operations]
+60 = "add"
+62 = "sub"
+64 = "dup"
+65 = "drop"
+67 = "mul"
+69 = "div"
+71 = "mod"
+72 = "loop_start"
+74 = "loop_end"
+76 = "eq"
+77 = "gt"
+79 = "lt"
+81 = "print_char"
+83 = "print_num"
+84 = "read"
+86 = "store"
+88 = "load"
+89 = "swap"
+91 = "rotate"

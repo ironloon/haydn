@@ -1,5 +1,5 @@
 /// All 19 opcodes in the Haydn instruction set (spec §3.4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Opcode {
     Dup,
     Swap,
