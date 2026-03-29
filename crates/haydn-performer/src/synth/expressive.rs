@@ -25,8 +25,14 @@ impl Lfo {
     }
 }
 
-/// Expressive source: additive synthesis with instrument-specific harmonic profiles,
-/// vibrato, tremolo, and velocity scaling. Vibrato fades in gradually so short notes stay clean.
+/// Expressive source: additive synthesis with spectral evolution, attack transients,
+/// instrument-specific harmonic profiles, vibrato, tremolo, and velocity scaling.
+///
+/// Key realism features:
+/// - Harmonics are brighter at attack, mellowing into sustain (spectral evolution)
+/// - Filtered noise burst during attack phase (hammer/breath/bow transient)
+/// - Vibrato fades in gradually so short notes stay clean
+/// - Per-instrument ADSR curves, harmonic profiles, and expression parameters
 pub struct ExpressiveSource {
     sample_rate: u32,
     base_frequency: f32,
@@ -38,6 +44,15 @@ pub struct ExpressiveSource {
     total_samples: u64,
     vibrato_onset_samples: u64,
     harmonics: &'static [f32],
+    // Spectral evolution
+    attack_brightness: f32,
+    brightness_decay_samples: u64,
+    // Attack noise transient
+    noise: super::timbre::NoiseGenerator,
+    attack_noise_amplitude: f32,
+    attack_noise_samples: u64,
+    // Articulation gap
+    gap_samples: u64,
 }
 
 impl ExpressiveSource {
@@ -66,8 +81,12 @@ impl ExpressiveSource {
         velocity: u8,
         instrument: super::timbre::Instrument,
     ) -> Self {
-        let total_samples = (duration.as_secs_f64() * sample_rate as f64) as u64;
         let profile = instrument.profile();
+
+        // Reserve gap samples at the end for articulation silence
+        let gap_samples = (profile.articulation_gap_ms / 1000.0 * sample_rate as f32) as u64;
+        let raw_total = (duration.as_secs_f64() * sample_rate as f64) as u64;
+        let total_samples = raw_total; // gap is appended, total stays the same
 
         let vibrato_onset_samples = (profile.vibrato_onset_ms / 1000.0 * sample_rate as f32) as u64;
 
@@ -83,6 +102,10 @@ impl ExpressiveSource {
             Lfo::new(0.0, 0.0, sample_rate)
         };
 
+        // Spectral evolution timing
+        let brightness_decay_samples = (profile.brightness_decay_ms / 1000.0 * sample_rate as f32) as u64;
+        let attack_noise_samples = (profile.attack_noise_ms / 1000.0 * sample_rate as f32) as u64;
+
         Self {
             sample_rate,
             base_frequency: frequency,
@@ -94,6 +117,12 @@ impl ExpressiveSource {
             total_samples,
             vibrato_onset_samples,
             harmonics: profile.harmonics,
+            attack_brightness: profile.attack_brightness,
+            brightness_decay_samples,
+            noise: super::timbre::NoiseGenerator::new(profile.noise_highpass),
+            attack_noise_amplitude: profile.attack_noise,
+            attack_noise_samples,
+            gap_samples,
         }
     }
 }
@@ -106,11 +135,18 @@ impl Iterator for ExpressiveSource {
             return None;
         }
 
+        // Articulation gap: output silence for the last N samples
+        let sound_samples = self.total_samples.saturating_sub(self.gap_samples);
+        if self.sample_index >= sound_samples {
+            self.sample_index += 1;
+            return Some(0.0);
+        }
+
         let vibrato_raw = self.vibrato.sample();
         let tremolo_mod = self.tremolo.sample();
 
-        // Fade vibrato in over onset period so short notes stay clean
-        let vibrato_mod = if self.sample_index < self.vibrato_onset_samples {
+        // Fade vibrato in over onset period
+        let vibrato_mod = if self.vibrato_onset_samples > 0 && self.sample_index < self.vibrato_onset_samples {
             let fade = self.sample_index as f32 / self.vibrato_onset_samples as f32;
             vibrato_raw * fade
         } else {
@@ -120,17 +156,34 @@ impl Iterator for ExpressiveSource {
         let frequency = self.base_frequency * (1.0 + vibrato_mod);
         let phase = frequency * self.sample_index as f32 / self.sample_rate as f32;
 
-        // Additive synthesis using instrument harmonic profile
-        let base_sample = super::timbre::additive_sample(
+        // Spectral evolution: brightness decays from attack_brightness to 1.0
+        let brightness = if self.brightness_decay_samples > 0 && self.sample_index < self.brightness_decay_samples {
+            let t = self.sample_index as f32 / self.brightness_decay_samples as f32;
+            self.attack_brightness + (1.0 - self.attack_brightness) * t
+        } else {
+            1.0
+        };
+
+        // Additive synthesis with evolved spectral profile
+        let base_sample = super::timbre::additive_sample_evolved(
             phase,
             frequency,
             self.sample_rate,
             self.harmonics,
+            brightness,
         );
+
+        // Attack noise transient
+        let noise = if self.sample_index < self.attack_noise_samples {
+            let fade = 1.0 - (self.sample_index as f32 / self.attack_noise_samples as f32);
+            self.noise.sample() * self.attack_noise_amplitude * fade
+        } else {
+            0.0
+        };
 
         let amp = self.amplitude * self.velocity_scale * (1.0 + tremolo_mod);
         self.sample_index += 1;
-        Some(base_sample * amp)
+        Some((base_sample + noise) * amp)
     }
 }
 

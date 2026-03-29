@@ -8,7 +8,11 @@ pub enum AdsrPhase {
     Done,
 }
 
-/// ADSR envelope generator that shapes note amplitude over time.
+/// ADSR envelope generator with exponential curves for natural dynamics.
+///
+/// Real instruments don't have linear amplitude ramps — attack is concave
+/// (fast initial rise), decay/release are convex (fast initial drop that
+/// tapers). The `curve` parameter controls this: higher = more exponential.
 pub struct AdsrEnvelope {
     attack_samples: u64,
     decay_samples: u64,
@@ -17,10 +21,12 @@ pub struct AdsrEnvelope {
     total_samples: u64,
     release_samples: u64,
     sample_index: u64,
+    /// Exponential curve steepness (1.0 = linear, 3.0+ = very exponential)
+    curve: f32,
 }
 
 impl AdsrEnvelope {
-    /// Create a new ADSR envelope.
+    /// Create a new ADSR envelope with exponential curves.
     ///
     /// - `attack_ms`: time to ramp from 0 to 1.0
     /// - `decay_ms`: time to ramp from 1.0 to sustain_level
@@ -35,6 +41,19 @@ impl AdsrEnvelope {
         release_ms: f32,
         note_duration: std::time::Duration,
         sample_rate: u32,
+    ) -> Self {
+        Self::with_curve(attack_ms, decay_ms, sustain_level, release_ms, note_duration, sample_rate, 2.0)
+    }
+
+    /// Create with explicit curve steepness.
+    pub fn with_curve(
+        attack_ms: f32,
+        decay_ms: f32,
+        sustain_level: f32,
+        release_ms: f32,
+        note_duration: std::time::Duration,
+        sample_rate: u32,
+        curve: f32,
     ) -> Self {
         let sr = sample_rate as f64;
         let attack_samples = (attack_ms as f64 / 1000.0 * sr) as u64;
@@ -52,6 +71,7 @@ impl AdsrEnvelope {
             total_samples,
             release_samples,
             sample_index: 0,
+            curve,
         }
     }
 
@@ -66,13 +86,14 @@ impl AdsrEnvelope {
         note_duration: std::time::Duration,
         sample_rate: u32,
     ) -> Self {
-        Self::new(
+        Self::with_curve(
             profile.attack_ms,
             profile.decay_ms,
             profile.sustain_level,
             profile.release_ms,
             note_duration,
             sample_rate,
+            profile.adsr_curve,
         )
     }
 
@@ -87,20 +108,24 @@ impl AdsrEnvelope {
 
         // Release phase takes priority if we've passed the release start point
         if idx >= self.release_start {
-            let release_progress = (idx - self.release_start) as f32 / self.release_samples.max(1) as f32;
-            return self.sustain_level * (1.0 - release_progress).max(0.0);
+            let t = (idx - self.release_start) as f32 / self.release_samples.max(1) as f32;
+            // Exponential release: fast initial drop, long tail
+            let shaped = 1.0 - exp_curve(t, self.curve);
+            return self.sustain_level * shaped.max(0.0);
         }
 
-        // Attack phase
+        // Attack phase — concave curve (fast initial rise)
         if idx < self.attack_samples {
-            return idx as f32 / self.attack_samples.max(1) as f32;
+            let t = idx as f32 / self.attack_samples.max(1) as f32;
+            return exp_curve(t, self.curve);
         }
 
-        // Decay phase
+        // Decay phase — convex curve (fast drop, tapers to sustain)
         let decay_start = self.attack_samples;
         if idx < decay_start + self.decay_samples {
-            let decay_progress = (idx - decay_start) as f32 / self.decay_samples.max(1) as f32;
-            return 1.0 - (1.0 - self.sustain_level) * decay_progress;
+            let t = (idx - decay_start) as f32 / self.decay_samples.max(1) as f32;
+            let shaped = 1.0 - exp_curve(t, self.curve);
+            return self.sustain_level + (1.0 - self.sustain_level) * shaped;
         }
 
         // Sustain phase
@@ -119,6 +144,18 @@ impl AdsrEnvelope {
         } else {
             AdsrPhase::Sustain
         }
+    }
+}
+
+/// Shape a linear 0..1 value into an exponential curve.
+/// curve=1.0 is linear, curve=2.0 is moderately exponential, 4.0+ is steep.
+fn exp_curve(t: f32, curve: f32) -> f32 {
+    if curve <= 1.0 {
+        t
+    } else {
+        // (e^(t*c) - 1) / (e^c - 1) — normalized exponential
+        let ec = (curve).exp();
+        ((t * curve).exp() - 1.0) / (ec - 1.0)
     }
 }
 

@@ -1,3 +1,4 @@
+use crate::synth::effects;
 use crate::synth::expressive::ExpressiveSource;
 use crate::synth::sine::{midi_to_freq, SilenceSource, SineSource};
 use crate::synth::timbre::Instrument;
@@ -74,7 +75,8 @@ impl SynthBackend for BuiltinSynth {
                             }
                         }
                         3 => {
-                            // Expressive: additive synthesis with instrument harmonic profile
+                            // Expressive: additive synthesis + spectral evolution
+                            // + attack transients + instrument envelope
                             let mut expressive = ExpressiveSource::with_instrument(
                                 freq,
                                 note.duration,
@@ -97,6 +99,20 @@ impl SynthBackend for BuiltinSynth {
                     buffer.extend(silence);
                 }
             }
+        }
+
+        // Fidelity 3: apply post-processing chain (reverb → saturation → stereo)
+        if fidelity == 3 {
+            // Soft saturation to warm peaks and prevent clipping
+            effects::soft_saturate(&mut buffer, 1.3);
+
+            // Algorithmic reverb for room acoustics
+            let mut reverb = effects::Reverb::hall(sr);
+            reverb.process(&mut buffer);
+
+            // Convert to stereo with Haas-effect width
+            let stereo = effects::mono_to_stereo(&buffer, sr);
+            return Box::new(rodio::buffer::SamplesBuffer::new(2, sample_rate, stereo));
         }
 
         Box::new(rodio::buffer::SamplesBuffer::new(1, sample_rate, buffer))
