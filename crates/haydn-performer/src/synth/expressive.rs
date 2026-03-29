@@ -25,7 +25,8 @@ impl Lfo {
     }
 }
 
-/// Expressive source: wraps a base waveform and applies vibrato, tremolo, and velocity scaling.
+/// Expressive source: additive synthesis with instrument-specific harmonic profiles,
+/// vibrato, tremolo, and velocity scaling. Vibrato fades in gradually so short notes stay clean.
 pub struct ExpressiveSource {
     sample_rate: u32,
     base_frequency: f32,
@@ -35,6 +36,8 @@ pub struct ExpressiveSource {
     tremolo: Lfo,
     sample_index: u64,
     total_samples: u64,
+    vibrato_onset_samples: u64,
+    harmonics: &'static [f32],
 }
 
 impl ExpressiveSource {
@@ -45,16 +48,52 @@ impl ExpressiveSource {
         amplitude: f32,
         velocity: u8,
     ) -> Self {
+        Self::with_instrument(
+            frequency,
+            duration,
+            sample_rate,
+            amplitude,
+            velocity,
+            super::timbre::Instrument::default(),
+        )
+    }
+
+    pub fn with_instrument(
+        frequency: f32,
+        duration: Duration,
+        sample_rate: u32,
+        amplitude: f32,
+        velocity: u8,
+        instrument: super::timbre::Instrument,
+    ) -> Self {
         let total_samples = (duration.as_secs_f64() * sample_rate as f64) as u64;
+        let profile = instrument.profile();
+
+        let vibrato_onset_samples = (profile.vibrato_onset_ms / 1000.0 * sample_rate as f32) as u64;
+
+        let vibrato = if profile.vibrato_depth > 0.0 {
+            Lfo::new(profile.vibrato_rate, profile.vibrato_depth, sample_rate)
+        } else {
+            Lfo::new(0.0, 0.0, sample_rate)
+        };
+
+        let tremolo = if profile.tremolo_depth > 0.0 {
+            Lfo::new(profile.tremolo_rate, profile.tremolo_depth, sample_rate)
+        } else {
+            Lfo::new(0.0, 0.0, sample_rate)
+        };
+
         Self {
             sample_rate,
             base_frequency: frequency,
             amplitude,
             velocity_scale: velocity as f32 / 127.0,
-            vibrato: Lfo::new(5.5, 0.005, sample_rate),   // subtle pitch wobble
-            tremolo: Lfo::new(4.0, 0.1, sample_rate),     // gentle amplitude variation
+            vibrato,
+            tremolo,
             sample_index: 0,
             total_samples,
+            vibrato_onset_samples,
+            harmonics: profile.harmonics,
         }
     }
 }
@@ -67,16 +106,27 @@ impl Iterator for ExpressiveSource {
             return None;
         }
 
-        let vibrato_mod = self.vibrato.sample();
+        let vibrato_raw = self.vibrato.sample();
         let tremolo_mod = self.tremolo.sample();
+
+        // Fade vibrato in over onset period so short notes stay clean
+        let vibrato_mod = if self.sample_index < self.vibrato_onset_samples {
+            let fade = self.sample_index as f32 / self.vibrato_onset_samples as f32;
+            vibrato_raw * fade
+        } else {
+            vibrato_raw
+        };
 
         let frequency = self.base_frequency * (1.0 + vibrato_mod);
         let phase = frequency * self.sample_index as f32 / self.sample_rate as f32;
 
-        // Use blended waveform like Layer 2
-        use super::waveform::{saw_sample, triangle_sample};
-        let sine = (2.0 * std::f32::consts::PI * phase).sin();
-        let base_sample = 0.5 * saw_sample(phase) + 0.3 * sine + 0.2 * triangle_sample(phase);
+        // Additive synthesis using instrument harmonic profile
+        let base_sample = super::timbre::additive_sample(
+            phase,
+            frequency,
+            self.sample_rate,
+            self.harmonics,
+        );
 
         let amp = self.amplitude * self.velocity_scale * (1.0 + tremolo_mod);
         self.sample_index += 1;

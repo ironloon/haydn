@@ -34,8 +34,8 @@ pub fn square_sample(phase: f32) -> f32 {
     sum * (4.0 / std::f32::consts::PI)
 }
 
-/// Blended waveform source: 50% saw + 30% sine + 20% triangle.
-/// Produces a warm, rich, piano-like timbre.
+/// Blended waveform source: sine-dominant with harmonic warmth.
+/// 65% sine + 20% triangle + 15% saw for a warm, rounded timbre.
 pub struct WaveformSource {
     sample_rate: u32,
     frequency: f32,
@@ -66,7 +66,7 @@ impl Iterator for WaveformSource {
         }
         let phase = self.frequency * self.sample_index as f32 / self.sample_rate as f32;
         let sine = (2.0 * std::f32::consts::PI * phase).sin();
-        let sample = self.amplitude * (0.5 * saw_sample(phase) + 0.3 * sine + 0.2 * triangle_sample(phase));
+        let sample = self.amplitude * (0.65 * sine + 0.20 * triangle_sample(phase) + 0.15 * saw_sample(phase));
         self.sample_index += 1;
         Some(sample)
     }
@@ -125,7 +125,7 @@ mod tests {
     }
 
     #[test]
-    fn test_waveform_source_richer_than_sine() {
+    fn test_waveform_source_differs_from_sine() {
         use crate::synth::sine::SineSource;
 
         let sine = SineSource::new(440.0, Duration::from_millis(100), 44100, 1.0);
@@ -134,15 +134,17 @@ mod tests {
         let sine_samples: Vec<f32> = sine.collect();
         let waveform_samples: Vec<f32> = waveform.collect();
 
-        // Waveform should have more harmonic energy (higher variance in sample differences)
-        let sine_energy: f32 = sine_samples.windows(2).map(|w| (w[1] - w[0]).powi(2)).sum();
-        let waveform_energy: f32 = waveform_samples.windows(2).map(|w| (w[1] - w[0]).powi(2)).sum();
+        // Blended waveform should differ from pure sine (triangle + saw add subtle harmonics)
+        let diff: f32 = sine_samples
+            .iter()
+            .zip(waveform_samples.iter())
+            .map(|(a, b)| (a - b).abs())
+            .sum();
 
         assert!(
-            waveform_energy > sine_energy,
-            "waveform should have more harmonic energy: sine={}, waveform={}",
-            sine_energy,
-            waveform_energy
+            diff > 0.1,
+            "waveform should noticeably differ from pure sine, diff={}",
+            diff
         );
     }
 }

@@ -1,5 +1,6 @@
 use crate::synth::expressive::ExpressiveSource;
 use crate::synth::sine::{midi_to_freq, SilenceSource, SineSource};
+use crate::synth::timbre::Instrument;
 use crate::synth::waveform::WaveformSource;
 use crate::synth::SynthBackend;
 use crate::types::{NoteSequence, ScoreEvent};
@@ -10,15 +11,24 @@ use super::adsr::AdsrEnvelope;
 /// - Fidelity 0: Pure sine waves
 /// - Fidelity 1: Sine + ADSR envelope (default)
 /// - Fidelity 2: Blended waveforms + ADSR (richer timbre)
-/// - Fidelity 3: Expressive (vibrato, velocity) + waveforms + ADSR
+/// - Fidelity 3: Expressive (additive synthesis with instrument profiles)
 pub struct BuiltinSynth {
     pub fidelity: u8,
+    pub instrument: Instrument,
 }
 
 impl BuiltinSynth {
     pub fn new(fidelity: u8) -> Self {
         Self {
             fidelity: fidelity.min(3),
+            instrument: Instrument::default(),
+        }
+    }
+
+    pub fn with_instrument(fidelity: u8, instrument: Instrument) -> Self {
+        Self {
+            fidelity: fidelity.min(3),
+            instrument,
         }
     }
 }
@@ -64,15 +74,17 @@ impl SynthBackend for BuiltinSynth {
                             }
                         }
                         3 => {
-                            // Expressive (vibrato + velocity) + waveform + ADSR
-                            let mut expressive = ExpressiveSource::new(
+                            // Expressive: additive synthesis with instrument harmonic profile
+                            let mut expressive = ExpressiveSource::with_instrument(
                                 freq,
                                 note.duration,
                                 sr,
                                 1.0,
                                 note.velocity,
+                                self.instrument,
                             );
-                            let mut env = AdsrEnvelope::piano(note.duration, sr);
+                            let profile = self.instrument.profile();
+                            let mut env = AdsrEnvelope::from_profile(&profile, note.duration, sr);
                             while let Some(sample) = expressive.next() {
                                 buffer.push(sample * env.amplitude());
                             }

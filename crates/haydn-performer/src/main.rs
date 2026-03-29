@@ -53,7 +53,11 @@ fn main() -> Result<()> {
             0 => "built-in (sine)",
             1 => "built-in (sine + ADSR)",
             2 => "built-in (waveform + ADSR)",
-            3 => "built-in (expressive)",
+            3 => {
+                let inst = format!("{:?}", args.instrument).to_lowercase();
+                // Leak is fine: synth_name lives for the program's duration
+                Box::leak(format!("built-in ({inst})").into_boxed_str()) as &str
+            }
             _ => "built-in",
         },
         cli::SynthType::Soundfont => "soundfont (SF2)",
@@ -71,7 +75,10 @@ fn main() -> Result<()> {
 
     match args.synth {
         cli::SynthType::Builtin => {
-            let backend = haydn_performer::synth::builtin::BuiltinSynth::new(args.fidelity);
+            let backend = haydn_performer::synth::builtin::BuiltinSynth::with_instrument(
+                args.fidelity,
+                args.instrument,
+            );
             play_with_display(
                 &backend,
                 &sequence,

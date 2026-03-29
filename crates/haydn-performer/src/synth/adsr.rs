@@ -60,6 +60,22 @@ impl AdsrEnvelope {
         Self::new(10.0, 100.0, 0.7, 200.0, note_duration, sample_rate)
     }
 
+    /// Create an ADSR envelope from an instrument profile.
+    pub fn from_profile(
+        profile: &super::timbre::InstrumentProfile,
+        note_duration: std::time::Duration,
+        sample_rate: u32,
+    ) -> Self {
+        Self::new(
+            profile.attack_ms,
+            profile.decay_ms,
+            profile.sustain_level,
+            profile.release_ms,
+            note_duration,
+            sample_rate,
+        )
+    }
+
     /// Get current envelope amplitude and advance by one sample.
     pub fn amplitude(&mut self) -> f32 {
         if self.sample_index >= self.total_samples {

@@ -8,6 +8,9 @@ pub enum SynthType {
     Midi,
 }
 
+// Re-export for CLI access
+pub use haydn_performer::synth::timbre::Instrument;
+
 #[derive(Parser, Debug)]
 #[command(
     name = "haydn-performer",
@@ -68,4 +71,8 @@ pub struct Cli {
     /// Playback volume (0.0 to 1.0, default 1.0)
     #[arg(long, default_value_t = 1.0)]
     pub volume: f32,
+
+    /// Instrument timbre preset (piano, strings, flute, organ, clarinet, trumpet)
+    #[arg(long, default_value = "piano", value_enum)]
+    pub instrument: Instrument,
 }
