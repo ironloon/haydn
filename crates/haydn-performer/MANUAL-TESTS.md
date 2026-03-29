@@ -69,6 +69,23 @@ cargo run -p haydn-performer -- crates/haydn-performer/examples/scale.ly --synth
 - [ ] File is a valid MIDI file (open in a DAW, MIDI player, or https://signal.vercel.app/edit)
 - [ ] Notes correspond to C major scale
 
+## Loopback Test (Speakers → Mic)
+
+### 8. Mic Loopback Verification
+```
+cargo run -p haydn-performer -- --test-loopback
+```
+**Setup:** Speakers on (not headphones), system mic enabled, reasonable volume.
+- [ ] Output shows mic device name and config
+- [ ] "Playing 440Hz test tone" appears and you hear the tone
+- [ ] Recorded sample count is reasonable (>10k samples)
+- [ ] RMS level is above 0.001 (mic picked up signal)
+- [ ] Estimated frequency is near 440Hz
+- [ ] Result says PASS
+
+**If FAIL (near-silence):** mic is muted, using headphones, or speakers too quiet.
+**If PARTIAL (wrong freq):** ambient noise dominated — try in a quieter room.
+
 ## Troubleshooting
 
 **No audio at all:**

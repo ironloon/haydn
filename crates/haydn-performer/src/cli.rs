@@ -21,6 +21,10 @@ pub struct Cli {
     #[arg(long)]
     pub test_audio: bool,
 
+    /// Loopback test: plays a tone through speakers and records via mic to verify
+    #[arg(long)]
+    pub test_loopback: bool,
+
     /// Synthesis backend
     #[arg(long, default_value = "builtin", value_enum)]
     pub synth: SynthType,

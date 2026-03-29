@@ -13,6 +13,11 @@ fn main() -> Result<()> {
         return run_audio_test();
     }
 
+    // --test-loopback: play tone + record via mic to verify end-to-end audio
+    if args.test_loopback {
+        return run_loopback_test();
+    }
+
     let score_path = args
         .score
         .as_ref()
@@ -181,4 +186,175 @@ fn run_audio_test() -> Result<()> {
     eprintln!("    at short durations — ADSR differences are subtle on quick notes.");
 
     Ok(())
+}
+
+/// Loopback test: plays a 440Hz tone through speakers while recording from the
+/// default microphone, then checks whether the mic captured the expected frequency.
+///
+/// Requirements: speakers + microphone active (not headphones-only).
+fn run_loopback_test() -> Result<()> {
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    const TEST_FREQ: f32 = 440.0; // A4
+    const SAMPLE_RATE: u32 = 44100;
+    const PLAY_SECS: f64 = 2.0;
+
+    eprintln!("=== Loopback Test ===");
+    eprintln!("This plays a 440Hz tone through speakers and records from your mic.");
+    eprintln!("Make sure speakers + mic are active (not just headphones).\n");
+
+    // --- Set up mic recording ---
+    let host = cpal::default_host();
+    let input_device = host
+        .default_input_device()
+        .ok_or_else(|| anyhow::anyhow!("No microphone / input device found"))?;
+
+    let input_name = input_device.name().unwrap_or_else(|_| "unknown".into());
+    eprintln!("  Mic: {}", input_name);
+
+    let input_config = input_device
+        .default_input_config()
+        .context("Failed to get mic config")?;
+    let mic_sample_rate = input_config.sample_rate().0;
+    let mic_channels = input_config.channels() as usize;
+
+    eprintln!(
+        "  Mic config: {}Hz, {} ch, {:?}",
+        mic_sample_rate, mic_channels, input_config.sample_format()
+    );
+
+    let recorded: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+    let recorded_clone = recorded.clone();
+
+    let input_stream = match input_config.sample_format() {
+        cpal::SampleFormat::F32 => {
+            let rec = recorded_clone;
+            input_device.build_input_stream(
+                &input_config.into(),
+                move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                    // Take just first channel
+                    let mut buf = rec.lock().unwrap();
+                    for chunk in data.chunks(mic_channels) {
+                        buf.push(chunk[0]);
+                    }
+                },
+                |err| eprintln!("  Mic error: {}", err),
+                None,
+            )?
+        }
+        cpal::SampleFormat::I16 => {
+            let rec = recorded_clone;
+            input_device.build_input_stream(
+                &input_config.into(),
+                move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                    let mut buf = rec.lock().unwrap();
+                    for chunk in data.chunks(mic_channels) {
+                        buf.push(chunk[0] as f32 / i16::MAX as f32);
+                    }
+                },
+                |err| eprintln!("  Mic error: {}", err),
+                None,
+            )?
+        }
+        fmt => bail!("Unsupported mic sample format: {:?}", fmt),
+    };
+
+    // --- Start recording ---
+    input_stream.play().context("Failed to start mic recording")?;
+    eprintln!("  Recording started...");
+
+    // Small delay to let mic settle
+    std::thread::sleep(Duration::from_millis(200));
+
+    // --- Play 440Hz tone ---
+    eprintln!("  Playing 440Hz test tone for {:.0}s...", PLAY_SECS);
+    let (_stream, stream_handle) =
+        rodio::OutputStream::try_default().context("Failed to open audio output")?;
+    let sink = rodio::Sink::try_new(&stream_handle)?;
+
+    let tone = haydn_performer::synth::sine::SineSource::new(
+        TEST_FREQ,
+        Duration::from_secs_f64(PLAY_SECS),
+        SAMPLE_RATE,
+        0.8,
+    );
+    sink.append(tone);
+    sink.sleep_until_end();
+
+    // Record a bit of tail
+    std::thread::sleep(Duration::from_millis(300));
+    drop(input_stream);
+
+    // --- Analyze recorded audio ---
+    let samples = recorded.lock().unwrap();
+    let num_samples = samples.len();
+    eprintln!("\n  Recorded {} samples ({:.2}s at {}Hz)",
+        num_samples,
+        num_samples as f64 / mic_sample_rate as f64,
+        mic_sample_rate
+    );
+
+    if num_samples < 1000 {
+        eprintln!("\n  FAIL: Too few samples recorded. Mic may not be working.");
+        eprintln!("  Check: System Settings > Sound > Input device");
+        return Ok(());
+    }
+
+    // Check signal level (RMS)
+    let rms: f32 = (samples.iter().map(|s| s * s).sum::<f32>() / num_samples as f32).sqrt();
+    eprintln!("  RMS level: {:.4} ({:.1} dB)", rms, 20.0 * rms.log10());
+
+    if rms < 0.001 {
+        eprintln!("\n  FAIL: Mic recorded near-silence (RMS < 0.001).");
+        eprintln!("  The tone played but the mic didn't pick it up.");
+        eprintln!("  Causes: mic muted, speakers too quiet, or using headphones.");
+        return Ok(());
+    }
+
+    // Zero-crossing frequency estimation (simple but effective for pure tones)
+    let dominant_freq = estimate_frequency(&samples, mic_sample_rate);
+    eprintln!("  Estimated dominant frequency: {:.1}Hz (expected: {:.1}Hz)", dominant_freq, TEST_FREQ);
+
+    let tolerance = 30.0; // Hz — generous because room acoustics vary
+    if (dominant_freq - TEST_FREQ).abs() < tolerance {
+        eprintln!("\n  PASS: Mic captured the 440Hz tone successfully!");
+        eprintln!("  Audio output -> speakers -> mic -> capture pipeline works end-to-end.");
+    } else if dominant_freq > 50.0 {
+        eprintln!("\n  PARTIAL: Mic captured audio at {:.0}Hz (expected 440Hz).", dominant_freq);
+        eprintln!("  The mic is working but picked up a different dominant frequency.");
+        eprintln!("  This could be ambient noise or room resonance. Try in a quieter space.");
+    } else {
+        eprintln!("\n  FAIL: Could not detect a clear tone from the mic recording.");
+        eprintln!("  The mic recorded some signal but no clear pitch.");
+    }
+
+    Ok(())
+}
+
+/// Simple zero-crossing frequency estimation.
+/// Counts positive-to-negative zero crossings and derives frequency.
+fn estimate_frequency(samples: &[f32], sample_rate: u32) -> f32 {
+    // Skip the first 10% (mic settling) and last 10% (tail noise)
+    let start = samples.len() / 10;
+    let end = samples.len() * 9 / 10;
+    if end <= start + 100 {
+        return 0.0;
+    }
+    let region = &samples[start..end];
+
+    let mut crossings = 0u32;
+    for pair in region.windows(2) {
+        if pair[0] >= 0.0 && pair[1] < 0.0 {
+            crossings += 1;
+        }
+    }
+
+    let duration_secs = region.len() as f32 / sample_rate as f32;
+    if duration_secs > 0.0 {
+        crossings as f32 / duration_secs
+    } else {
+        0.0
+    }
 }
