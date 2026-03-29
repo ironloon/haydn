@@ -133,6 +133,36 @@ fn select_midi_port(
     }
 }
 
+fn wait_for_reconnect(
+    device_name: &str,
+    tx: mpsc::Sender<MidiMsg>,
+    running: &Arc<AtomicBool>,
+) -> Result<midir::MidiInputConnection<mpsc::Sender<MidiMsg>>> {
+    loop {
+        std::thread::sleep(Duration::from_secs(1));
+        if !running.load(Ordering::Relaxed) {
+            anyhow::bail!("Session interrupted while waiting for MIDI device");
+        }
+        if let Ok(probe) = MidiInput::new("haydn-probe") {
+            let ports = probe.ports();
+            let found = ports.iter().find(|p| {
+                probe.port_name(p).ok().as_deref() == Some(device_name)
+            });
+            if found.is_some() {
+                // probe was consumed by ports() borrow — create fresh MidiInput to connect
+                let midi_in = MidiInput::new("haydn-reconnect")?;
+                let ports = midi_in.ports();
+                if let Some(port) = ports.iter().find(|p| {
+                    midi_in.port_name(p).ok().as_deref() == Some(device_name)
+                }) {
+                    let conn = midi_in.connect(port, "haydn-input", midi_callback, tx)?;
+                    return Ok(conn);
+                }
+            }
+        }
+    }
+}
+
 fn print_event_log(note: u8, velocity: u8, result: &haydn_vm::StepResult) {
     use haydn_vm::{Event, Operation};
 
@@ -206,7 +236,8 @@ fn main() -> Result<()> {
 
     // Set up channel and connect
     let (tx, rx) = mpsc::channel::<MidiMsg>();
-    let _conn = midi_in.connect(&port, "haydn-input", midi_callback, tx)?;
+    let reconnect_tx = tx.clone();
+    let mut conn = midi_in.connect(&port, "haydn-input", midi_callback, tx)?;
 
     // Ctrl+C handler
     let running = Arc::new(AtomicBool::new(true));
@@ -237,8 +268,29 @@ fn main() -> Result<()> {
             Ok(MidiMsg::NoteOff { note }) => {
                 println!("[{} released]", note_name(note));
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if let Ok(probe) = MidiInput::new("haydn-probe") {
+                    let ports = probe.ports();
+                    let still_connected = ports.iter().any(|p| {
+                        probe.port_name(p).ok().as_deref() == Some(connected_name.as_str())
+                    });
+                    if !still_connected {
+                        drop(conn);
+                        eprintln!("\n⚠ MIDI device disconnected. Waiting for device... (Ctrl+C to quit)");
+                        conn = wait_for_reconnect(
+                            &connected_name,
+                            reconnect_tx.clone(),
+                            &running,
+                        )?;
+                        eprintln!("✓ MIDI device reconnected. Resuming session.\n");
+                    }
+                }
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                eprintln!("Channel disconnected unexpectedly. Ending session.");
+                break;
+            }
         }
     }
 
@@ -252,9 +304,6 @@ fn main() -> Result<()> {
         }
     }
     println!("───────────────────────");
-
-    // Keep connected_name alive for future reconnect use (Plan 02)
-    let _ = &connected_name;
 
     Ok(())
 }
