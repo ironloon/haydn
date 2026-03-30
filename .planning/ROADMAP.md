@@ -127,7 +127,7 @@ Plans:
   5. End-to-end audio capture pipeline latency is acceptable for live performance (<60ms)
 **Plans**: 4 plans
 Plans:
-- [ ] 06-01-PLAN.md — Crate scaffold + types + PitchDetector trait + tuning [audio] section
+- [x] 06-01-PLAN.md — Crate scaffold + types + PitchDetector trait + tuning [audio] section
 - [ ] 06-02-PLAN.md — YIN + McLeod NSDF pitch detection implementations + accuracy tests
 - [ ] 06-03-PLAN.md — Onset detection + noise gate + note state machine
 - [ ] 06-04-PLAN.md — Audio capture pipeline + public API + integration tests + verification
