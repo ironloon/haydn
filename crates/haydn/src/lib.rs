@@ -2,6 +2,7 @@ use std::sync::mpsc;
 
 pub mod display;
 
+pub use haydn_audio;
 pub use haydn_tuning;
 pub use haydn_vm;
 
@@ -82,6 +83,23 @@ pub fn format_event_log(note: u8, velocity: u8, result: &haydn_vm::StepResult) -
     }
 
     line
+}
+
+/// Convert a tuning file's [audio] section into an AudioConfig for the audio capture pipeline.
+/// Fields not present in AudioSection (window_size, hop_size, sample_rate) use defaults.
+pub fn audio_config_from_section(section: &haydn_tuning::AudioSection) -> haydn_audio::AudioConfig {
+    let defaults = haydn_audio::AudioConfig::default();
+    haydn_audio::AudioConfig {
+        noise_gate_db: section.noise_gate_db,
+        onset_threshold_db: section.onset_threshold_db,
+        pitch_stability_cents: section.pitch_stability_cents,
+        min_note_ms: section.min_note_ms,
+        confidence_threshold: section.confidence_threshold,
+        algorithm: section.algorithm.clone(),
+        window_size: defaults.window_size,
+        hop_size: defaults.hop_size,
+        sample_rate: defaults.sample_rate,
+    }
 }
 
 pub fn format_session_summary(vm: &haydn_vm::HaydnVm) -> String {

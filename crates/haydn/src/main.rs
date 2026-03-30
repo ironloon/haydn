@@ -295,6 +295,7 @@ fn main() -> Result<()> {
         let mut tui_state = display::TuiState::new(
             engine.metadata().name.clone(),
             connected_name.clone(),
+            "MIDI".to_string(),
         );
 
         let frame_budget = Duration::from_millis(33); // ~30fps
@@ -327,6 +328,7 @@ fn main() -> Result<()> {
                             tui_state.history.push(display::HistoryEntry {
                                 note_name: note_name(note),
                                 velocity,
+                                confidence: None,
                                 operation: "(unmapped)".to_string(),
                                 output_text: None,
                                 edge_case: None,

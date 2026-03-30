@@ -11,6 +11,7 @@ categories = ["compilers"]
 [dependencies]
 haydn-vm = { path = "../haydn-vm" }
 haydn-tuning = { path = "../haydn-tuning" }
+haydn-audio = { path = "../haydn-audio" }
 midir = "0.10"
 midly = "0.5"
 clap = { version = "4", features = ["derive"] }

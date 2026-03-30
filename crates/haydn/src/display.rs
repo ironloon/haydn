@@ -9,6 +9,7 @@ use std::io::stdout;
 pub struct HistoryEntry {
     pub note_name: String,
     pub velocity: u8,
+    pub confidence: Option<f32>,
     pub operation: String,
     pub output_text: Option<String>,
     pub edge_case: Option<String>,
@@ -47,6 +48,7 @@ impl HistoryEntry {
         Self {
             note_name,
             velocity,
+            confidence: None,
             operation,
             output_text,
             edge_case,
@@ -63,12 +65,14 @@ pub struct TuiState {
     pub device_name: String,
     pub connected: bool,
     pub loop_state: String,
+    pub input_mode: String,
+    pub signal_level: Option<f32>,
 }
 
 const MAX_HISTORY: usize = 50;
 
 impl TuiState {
-    pub fn new(tuning_name: String, device_name: String) -> Self {
+    pub fn new(tuning_name: String, device_name: String, input_mode: String) -> Self {
         Self {
             stack: Vec::new(),
             history: Vec::new(),
@@ -77,6 +81,8 @@ impl TuiState {
             device_name,
             connected: true,
             loop_state: "Normal".to_string(),
+            input_mode,
+            signal_level: None,
         }
     }
 
@@ -226,8 +232,13 @@ fn render_operations(frame: &mut Frame, state: &TuiState, area: Rect) {
     let lines: Vec<Line> = visible
         .iter()
         .map(|entry| {
+            let note_info = if let Some(conf) = entry.confidence {
+                format!("[{} ~{}%] → ", entry.note_name, (conf * 100.0) as u8)
+            } else {
+                format!("[{} v={}] → ", entry.note_name, entry.velocity)
+            };
             let mut spans = vec![
-                Span::raw(format!("[{} v={}] → ", entry.note_name, entry.velocity)),
+                Span::raw(note_info),
                 Span::styled(&entry.operation, Style::default().fg(Color::Cyan)),
             ];
             if let Some(ref text) = entry.output_text {
@@ -263,22 +274,33 @@ fn render_output(frame: &mut Frame, state: &TuiState, area: Rect) {
 
 fn render_status(frame: &mut Frame, state: &TuiState, area: Rect) {
     let device = if state.connected {
-        Span::raw(&state.device_name)
+        Span::raw(format!("{}: {}", state.input_mode, state.device_name))
     } else {
         Span::styled("⚠ Disconnected", Style::default().fg(Color::Yellow))
     };
 
     let sep = Span::styled("  │  ", Style::default().fg(Color::DarkGray));
 
-    let line = Line::from(vec![
+    let mut spans = vec![
         Span::raw(format!(" {}", state.tuning_name)),
         sep.clone(),
         device,
         sep.clone(),
         Span::raw(&state.loop_state),
-        sep,
-        Span::styled("q: quit", Style::default().fg(Color::DarkGray)),
-    ]);
+    ];
+
+    if let Some(level) = state.signal_level {
+        let blocks = ["▁", "▂", "▃", "▅", "▇"];
+        let idx = ((level.clamp(0.0, 1.0) * 4.0) as usize).min(4);
+        let meter: String = blocks[..=idx].join("");
+        spans.push(sep.clone());
+        spans.push(Span::styled(meter, Style::default().fg(Color::Green)));
+    }
+
+    spans.push(sep);
+    spans.push(Span::styled("q: quit", Style::default().fg(Color::DarkGray)));
+
+    let line = Line::from(spans);
 
     let paragraph = Paragraph::new(line);
     frame.render_widget(paragraph, area);

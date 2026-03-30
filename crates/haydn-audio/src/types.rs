@@ -3,6 +3,7 @@
 pub enum AudioMsg {
     NoteOn { note: u8, confidence: f32 },
     NoteOff,
+    SignalLevel(f32),
 }
 
 /// Configuration for audio capture and pitch detection.
