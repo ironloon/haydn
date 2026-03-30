@@ -12,7 +12,32 @@ pub struct RawTuningFile {
     pub operations: Option<BTreeMap<String, String>>,
     #[serde(default)]
     pub rules: Vec<RawRule>,
+    pub audio: Option<AudioSection>,
 }
+
+/// Audio input configuration section for microphone-based input.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AudioSection {
+    #[serde(default = "default_noise_gate_db")]
+    pub noise_gate_db: f32,
+    #[serde(default = "default_onset_threshold_db")]
+    pub onset_threshold_db: f32,
+    #[serde(default = "default_pitch_stability_cents")]
+    pub pitch_stability_cents: f32,
+    #[serde(default = "default_min_note_ms")]
+    pub min_note_ms: u32,
+    #[serde(default = "default_confidence_threshold")]
+    pub confidence_threshold: f32,
+    #[serde(default = "default_algorithm")]
+    pub algorithm: String,
+}
+
+fn default_noise_gate_db() -> f32 { -40.0 }
+fn default_onset_threshold_db() -> f32 { 6.0 }
+fn default_pitch_stability_cents() -> f32 { 50.0 }
+fn default_min_note_ms() -> u32 { 80 }
+fn default_confidence_threshold() -> f32 { 0.7 }
+fn default_algorithm() -> String { "mcleod".to_string() }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Metadata {

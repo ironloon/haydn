@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use crate::error::{TuningError, ValidationResult};
-use crate::types::{parse_opcode, RawEmit, RawTrigger, RawTuningFile};
+use crate::types::{parse_opcode, AudioSection, RawEmit, RawTrigger, RawTuningFile};
 
 /// Validate a parsed tuning file, collecting all errors in a single pass.
 pub fn validate(raw: &RawTuningFile) -> ValidationResult {
@@ -83,6 +83,11 @@ pub fn validate(raw: &RawTuningFile) -> ValidationResult {
     // Coverage warnings
     if !raw.metadata.partial_coverage {
         check_coverage(raw, &mut warnings);
+    }
+
+    // Validate audio section
+    if let Some(ref audio) = raw.audio {
+        validate_audio(audio, &mut errors);
     }
 
     ValidationResult { errors, warnings }
@@ -170,5 +175,63 @@ fn check_coverage(raw: &RawTuningFile, warnings: &mut Vec<String>) {
             "unmapped opcodes (set partial_coverage = true to suppress): {}",
             missing.join(", ")
         ));
+    }
+}
+
+/// Validate the optional [audio] section.
+fn validate_audio(audio: &AudioSection, errors: &mut Vec<TuningError>) {
+    if audio.noise_gate_db < -80.0 || audio.noise_gate_db > 0.0 {
+        errors.push(TuningError::Validation {
+            section: "audio".to_string(),
+            message: format!(
+                "noise_gate_db ({}) must be between -80.0 and 0.0",
+                audio.noise_gate_db
+            ),
+        });
+    }
+    if audio.onset_threshold_db < 1.0 || audio.onset_threshold_db > 20.0 {
+        errors.push(TuningError::Validation {
+            section: "audio".to_string(),
+            message: format!(
+                "onset_threshold_db ({}) must be between 1.0 and 20.0",
+                audio.onset_threshold_db
+            ),
+        });
+    }
+    if audio.pitch_stability_cents < 10.0 || audio.pitch_stability_cents > 200.0 {
+        errors.push(TuningError::Validation {
+            section: "audio".to_string(),
+            message: format!(
+                "pitch_stability_cents ({}) must be between 10.0 and 200.0",
+                audio.pitch_stability_cents
+            ),
+        });
+    }
+    if audio.min_note_ms < 10 || audio.min_note_ms > 500 {
+        errors.push(TuningError::Validation {
+            section: "audio".to_string(),
+            message: format!(
+                "min_note_ms ({}) must be between 10 and 500",
+                audio.min_note_ms
+            ),
+        });
+    }
+    if audio.confidence_threshold < 0.1 || audio.confidence_threshold > 1.0 {
+        errors.push(TuningError::Validation {
+            section: "audio".to_string(),
+            message: format!(
+                "confidence_threshold ({}) must be between 0.1 and 1.0",
+                audio.confidence_threshold
+            ),
+        });
+    }
+    if audio.algorithm != "yin" && audio.algorithm != "mcleod" {
+        errors.push(TuningError::Validation {
+            section: "audio".to_string(),
+            message: format!(
+                "algorithm '{}' must be \"yin\" or \"mcleod\"",
+                audio.algorithm
+            ),
+        });
     }
 }

@@ -26,3 +26,11 @@ range = [36, 59]
 88 = "load"
 89 = "swap"
 91 = "rotate"
+
+[audio]
+noise_gate_db = -40.0
+onset_threshold_db = 6.0
+pitch_stability_cents = 50.0
+min_note_ms = 80
+confidence_threshold = 0.7
+algorithm = "mcleod"

@@ -1,0 +1,12 @@
+[package]
+name = "haydn-audio"
+version = "0.0.1"
+edition = "2021"
+description = "Audio capture and pitch detection for the Haydn esoteric programming language"
+license = "MIT"
+repository = "https://github.com/jaredwray/haydn"
+
+[dependencies]
+cpal = "0.15"
+ringbuf = "0.4"
+thiserror = "2"

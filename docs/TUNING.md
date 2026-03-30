@@ -136,6 +136,43 @@ Interval triggers enable musical patterns: a perfect fifth (7 semitones) trigger
 | `push_offset` | (none) | Push `note - root_note` (same as values zone) |
 | `op` | `opcode: String` | Execute the named opcode |
 
+### `[audio]` — Audio Input Parameters (optional)
+
+Configuration for microphone-based input (`--input mic`). This section is only used when audio capture is active — it has no effect on MIDI input. If omitted, sensible defaults are used.
+
+| Field | Type | Default | Range | Description |
+|-------|------|---------|-------|-------------|
+| `noise_gate_db` | f32 | `-40.0` | -80.0 to 0.0 | RMS threshold in dB below which input is treated as silence |
+| `onset_threshold_db` | f32 | `6.0` | 1.0 to 20.0 | Energy spike in dB above baseline required to trigger a new note onset |
+| `pitch_stability_cents` | f32 | `50.0` | 10.0 to 200.0 | Maximum pitch drift in cents before a new note is detected |
+| `min_note_ms` | u32 | `80` | 10 to 500 | Minimum note duration in milliseconds (debounce) |
+| `confidence_threshold` | f32 | `0.7` | 0.1 to 1.0 | Minimum pitch detection confidence to accept a note |
+| `algorithm` | String | `"mcleod"` | `"yin"` or `"mcleod"` | Pitch detection algorithm |
+
+Example with default values:
+
+```toml
+[audio]
+noise_gate_db = -40.0
+onset_threshold_db = 6.0
+pitch_stability_cents = 50.0
+min_note_ms = 80
+confidence_threshold = 0.7
+algorithm = "mcleod"
+```
+
+Example optimized for voice input (more forgiving thresholds for singing):
+
+```toml
+[audio]
+noise_gate_db = -35.0
+onset_threshold_db = 4.0
+pitch_stability_cents = 80.0
+min_note_ms = 120
+confidence_threshold = 0.6
+algorithm = "mcleod"
+```
+
 ## Opcode Reference
 
 All 19 opcodes in the Haydn instruction set. Stack notation: `(before -- after)`.
