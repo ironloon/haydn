@@ -130,7 +130,7 @@ Plans:
 - [x] 06-01-PLAN.md — Crate scaffold + types + PitchDetector trait + tuning [audio] section
 - [x] 06-02-PLAN.md — YIN + McLeod NSDF pitch detection implementations + accuracy tests
 - [x] 06-03-PLAN.md — Onset detection + noise gate + note state machine
-- [ ] 06-04-PLAN.md — Audio capture pipeline + public API + integration tests + verification
+- [x] 06-04-PLAN.md — Audio capture pipeline + public API + integration tests + verification
 
 ### Phase 7: Audio Integration & Instrument Tunings
 **Goal**: Microphone performance drives the full Haydn pipeline with voice and guitar tunings
