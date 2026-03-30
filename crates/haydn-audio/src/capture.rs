@@ -154,6 +154,13 @@ pub fn start_audio_capture(
                         return; // Receiver dropped, shut down
                     }
                 }
+
+                // Send signal level (RMS of the hop portion) for TUI meter
+                let hop_buf = &analysis_buffer[fill_start..];
+                let rms = (hop_buf.iter().map(|s| s * s).sum::<f32>() / hop_buf.len() as f32).sqrt();
+                if tx.send(AudioMsg::SignalLevel(rms)).is_err() {
+                    return;
+                }
             } else {
                 thread::sleep(Duration::from_millis(1));
             }

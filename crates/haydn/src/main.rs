@@ -10,7 +10,9 @@ use crossterm::event::{self as ct_event, Event as CtEvent, KeyCode, KeyEventKind
 use crossterm::ExecutableCommand;
 use midir::MidiInput;
 
-use haydn::{MidiMsg, display, midi_callback, note_name, process_note, process_note_structured, format_session_summary};
+use haydn::{MidiMsg, display, midi_callback, note_name, process_note, process_note_structured, format_session_summary, audio_config_from_section};
+use haydn_audio::AudioMsg;
+use cpal::traits::DeviceTrait;
 
 #[derive(Parser, Debug)]
 #[command(name = "haydn", about = "Haydn — an esoteric programming language performed by music")]
@@ -34,6 +36,18 @@ struct Cli {
     /// Demo mode — simulate MIDI input without hardware
     #[arg(long)]
     demo: bool,
+
+    /// Input source: "midi" or "mic" (default: midi)
+    #[arg(long, default_value = "midi")]
+    input: String,
+
+    /// Connect to audio device matching this name (substring match)
+    #[arg(long)]
+    audio_device: Option<String>,
+
+    /// List available audio input devices and exit
+    #[arg(long)]
+    list_audio: bool,
 }
 
 fn select_midi_port(
@@ -196,6 +210,32 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // --list-audio: enumerate audio inputs and exit
+    if cli.list_audio {
+        match haydn_audio::list_audio_input_devices() {
+            Ok(devices) if devices.is_empty() => println!("No audio input devices found."),
+            Ok(devices) => {
+                println!("Available audio input devices:");
+                for (i, name) in devices.iter().enumerate() {
+                    println!("  {}: {}", i + 1, name);
+                }
+            }
+            Err(e) => eprintln!("Error listing audio devices: {}", e),
+        }
+        return Ok(());
+    }
+
+    // Validate --input flag
+    let is_audio_mode = match cli.input.as_str() {
+        "midi" => false,
+        "mic" => true,
+        other => anyhow::bail!("Invalid --input value '{}'. Use 'midi' or 'mic'.", other),
+    };
+
+    if cli.demo && is_audio_mode {
+        anyhow::bail!("--demo is only supported with --input midi");
+    }
+
     // Load tuning engine
     let mut engine = if let Some(ref path) = cli.tuning {
         haydn_tuning::load_tuning_file(path).map_err(|errors| {
@@ -207,9 +247,6 @@ fn main() -> Result<()> {
     };
     println!("Tuning: {} (root={})", engine.metadata().name, note_name(engine.root_note()));
 
-    // Set up channel
-    let (tx, rx) = mpsc::channel::<MidiMsg>();
-
     // Ctrl+C handler
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
@@ -217,165 +254,324 @@ fn main() -> Result<()> {
         r.store(false, Ordering::Relaxed);
     })?;
 
-    // MIDI source: real device or demo simulator
-    let connected_name;
-    let mut _conn: Option<midir::MidiInputConnection<mpsc::Sender<MidiMsg>>> = None;
-    let reconnect_tx = tx.clone();
-
-    if cli.demo {
-        connected_name = "Demo (simulated)".to_string();
-        let demo_tx = tx.clone();
-        let demo_running = running.clone();
-        std::thread::spawn(move || {
-            run_demo_sequence(demo_tx, &demo_running);
-        });
-    } else {
-        let midi_in = MidiInput::new("haydn")?;
-        let (port, name) = select_midi_port(&midi_in, cli.midi_device.as_deref())?;
-        connected_name = name;
-        _conn = Some(midi_in.connect(&port, "haydn-input", midi_callback, tx.clone())?);
-    }
-
     // Main event loop
     let mut vm = haydn_vm::HaydnVm::new();
 
-    if cli.quiet {
-        // Quiet mode — existing scrolling text log (Phase 4 behavior)
-        println!("Listening for MIDI input... (Ctrl+C to quit)\n");
+    if is_audio_mode {
+        // ── Audio capture mode ──────────────────────────────────────
+        let device = haydn_audio::find_audio_input_device(cli.audio_device.as_deref())?;
+        let connected_name = device.name().unwrap_or_else(|_| "Unknown".to_string());
+        let audio_config = engine.audio_section()
+            .map(|s| audio_config_from_section(s))
+            .unwrap_or_default();
+        let (mut audio_rx, mut _stream) = haydn_audio::start_audio_capture(device, audio_config)?;
+        println!("Mic: {}", connected_name);
 
-        while running.load(Ordering::Relaxed) {
-            match rx.recv_timeout(Duration::from_millis(500)) {
-                Ok(MidiMsg::NoteOn { note, velocity }) => {
-                    for line in process_note(note, velocity, &mut engine, &mut vm) {
-                        println!("{}", line);
-                    }
-                }
-                Ok(MidiMsg::NoteOff { note }) => {
-                    println!("[{} released]", note_name(note));
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if !cli.demo {
-                        if let Ok(probe) = MidiInput::new("haydn-probe") {
-                            let ports = probe.ports();
-                            let still_connected = ports.iter().any(|p| {
-                                probe.port_name(p).ok().as_deref() == Some(connected_name.as_str())
-                            });
-                            if !still_connected {
-                                _conn = None;
-                                eprintln!("\n⚠ MIDI device disconnected. Waiting for device... (Ctrl+C to quit)");
-                                _conn = Some(wait_for_reconnect(
-                                    &connected_name,
-                                    reconnect_tx.clone(),
-                                    &running,
-                                )?);
-                                eprintln!("✓ MIDI device reconnected. Resuming session.\n");
-                            }
+        if cli.quiet {
+            // Audio quiet mode
+            println!("Listening for audio input... (Ctrl+C to quit)\n");
+
+            while running.load(Ordering::Relaxed) {
+                match audio_rx.recv_timeout(Duration::from_millis(500)) {
+                    Ok(AudioMsg::NoteOn { note, confidence }) => {
+                        let velocity = (confidence * 127.0) as u8;
+                        for line in process_note(note, velocity, &mut engine, &mut vm) {
+                            println!("{}", line);
                         }
                     }
-                    continue;
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    eprintln!("Channel disconnected unexpectedly. Ending session.");
-                    break;
-                }
-            }
-        }
-    } else {
-        // TUI mode — real-time dashboard (default)
-
-        // Ensure terminal is restored on panic
-        let default_panic = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            let _ = crossterm::terminal::disable_raw_mode();
-            let _ = std::io::stdout().execute(crossterm::terminal::LeaveAlternateScreen);
-            default_panic(info);
-        }));
-
-        let mut terminal = display::init_terminal()?;
-        let mut tui_state = display::TuiState::new(
-            engine.metadata().name.clone(),
-            connected_name.clone(),
-            "MIDI".to_string(),
-        );
-
-        let frame_budget = Duration::from_millis(33); // ~30fps
-        let mut last_render = Instant::now();
-        let mut last_disconnect_check = Instant::now();
-        let mut dirty = true;
-
-        // Render initial empty state
-        terminal.draw(|frame| display::render_dashboard(frame, &tui_state))?;
-
-        while running.load(Ordering::Relaxed) {
-            // 1. Poll keyboard events (non-blocking)
-            if ct_event::poll(Duration::from_millis(1))? {
-                if let CtEvent::Key(key) = ct_event::read()? {
-                    if key.kind == KeyEventKind::Press && key.code == KeyCode::Char('q') {
+                    Ok(AudioMsg::NoteOff) => {}
+                    Ok(AudioMsg::SignalLevel(_)) => {}
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        // Check for audio device disconnect
+                        if let Ok(devices) = haydn_audio::list_audio_input_devices() {
+                            if !devices.iter().any(|d| d == &connected_name) {
+                                eprintln!("\n⚠ Audio device disconnected. Waiting for device... (Ctrl+C to quit)");
+                                loop {
+                                    std::thread::sleep(Duration::from_secs(1));
+                                    if !running.load(Ordering::Relaxed) { break; }
+                                    if let Ok(devs) = haydn_audio::list_audio_input_devices() {
+                                        if devs.iter().any(|d| d == &connected_name) {
+                                            let new_device = haydn_audio::find_audio_input_device(Some(&connected_name))?;
+                                            let new_config = engine.audio_section()
+                                                .map(|s| audio_config_from_section(s))
+                                                .unwrap_or_default();
+                                            let (new_rx, new_stream) = haydn_audio::start_audio_capture(new_device, new_config)?;
+                                            audio_rx = new_rx;
+                                            _stream = new_stream;
+                                            eprintln!("✓ Audio device reconnected. Resuming session.\n");
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        eprintln!("Audio pipeline disconnected. Ending session.");
                         break;
                     }
                 }
             }
+        } else {
+            // Audio TUI mode
+            let default_panic = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                let _ = crossterm::terminal::disable_raw_mode();
+                let _ = std::io::stdout().execute(crossterm::terminal::LeaveAlternateScreen);
+                default_panic(info);
+            }));
 
-            // 2. Drain all pending MIDI events (non-blocking)
-            loop {
-                match rx.try_recv() {
-                    Ok(MidiMsg::NoteOn { note, velocity }) => {
-                        if let Some(results) = process_note_structured(note, &mut engine, &mut vm) {
-                            for result in &results {
-                                tui_state.update_from_step(note, velocity, result);
-                            }
-                        } else {
-                            tui_state.history.push(display::HistoryEntry {
-                                note_name: note_name(note),
-                                velocity,
-                                confidence: None,
-                                operation: "(unmapped)".to_string(),
-                                output_text: None,
-                                edge_case: None,
-                            });
+            let mut terminal = display::init_terminal()?;
+            let mut tui_state = display::TuiState::new(
+                engine.metadata().name.clone(),
+                connected_name.clone(),
+                "Mic".to_string(),
+            );
+
+            let frame_budget = Duration::from_millis(33);
+            let mut last_render = Instant::now();
+            let mut last_disconnect_check = Instant::now();
+            let mut dirty = true;
+
+            terminal.draw(|frame| display::render_dashboard(frame, &tui_state))?;
+
+            while running.load(Ordering::Relaxed) {
+                // 1. Poll keyboard events
+                if ct_event::poll(Duration::from_millis(1))? {
+                    if let CtEvent::Key(key) = ct_event::read()? {
+                        if key.kind == KeyEventKind::Press && key.code == KeyCode::Char('q') {
+                            break;
                         }
-                        tui_state.loop_state = vm.loop_state_name().to_string();
-                        tui_state.update_stack_and_output(&vm);
-                        dirty = true;
                     }
-                    Ok(MidiMsg::NoteOff { .. }) => {}
-                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                }
+
+                // 2. Drain audio events
+                loop {
+                    match audio_rx.try_recv() {
+                        Ok(AudioMsg::NoteOn { note, confidence }) => {
+                            let velocity = (confidence * 127.0) as u8;
+                            if let Some(results) = process_note_structured(note, &mut engine, &mut vm) {
+                                for result in &results {
+                                    tui_state.update_from_step(note, velocity, result);
+                                    if let Some(last) = tui_state.history.last_mut() {
+                                        last.confidence = Some(confidence);
+                                    }
+                                }
+                            } else {
+                                tui_state.history.push(display::HistoryEntry {
+                                    note_name: note_name(note),
+                                    velocity,
+                                    confidence: Some(confidence),
+                                    operation: "(unmapped)".to_string(),
+                                    output_text: None,
+                                    edge_case: None,
+                                });
+                            }
+                            tui_state.loop_state = vm.loop_state_name().to_string();
+                            tui_state.update_stack_and_output(&vm);
+                            dirty = true;
+                        }
+                        Ok(AudioMsg::NoteOff) => {}
+                        Ok(AudioMsg::SignalLevel(level)) => {
+                            tui_state.signal_level = Some(level);
+                            dirty = true;
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                    }
+                }
+
+                // 3. Check audio disconnect periodically
+                if last_disconnect_check.elapsed() > Duration::from_millis(500) {
+                    last_disconnect_check = Instant::now();
+                    if let Ok(devices) = haydn_audio::list_audio_input_devices() {
+                        if !devices.iter().any(|d| d == &connected_name) {
+                            tui_state.connected = false;
+                            terminal.draw(|frame| display::render_dashboard(frame, &tui_state))?;
+                            loop {
+                                std::thread::sleep(Duration::from_secs(1));
+                                if !running.load(Ordering::Relaxed) { break; }
+                                if let Ok(devs) = haydn_audio::list_audio_input_devices() {
+                                    if devs.iter().any(|d| d == &connected_name) {
+                                        let new_device = haydn_audio::find_audio_input_device(Some(&connected_name))?;
+                                        let new_config = engine.audio_section()
+                                            .map(|s| audio_config_from_section(s))
+                                            .unwrap_or_default();
+                                        let (new_rx, new_stream) = haydn_audio::start_audio_capture(new_device, new_config)?;
+                                        audio_rx = new_rx;
+                                        _stream = new_stream;
+                                        tui_state.connected = true;
+                                        dirty = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 4. Render
+                if dirty || last_render.elapsed() >= frame_budget {
+                    terminal.draw(|frame| display::render_dashboard(frame, &tui_state))?;
+                    last_render = Instant::now();
+                    dirty = false;
                 }
             }
 
-            // 3. Check MIDI disconnect periodically (every 500ms, skip in demo mode)
-            if !cli.demo && last_disconnect_check.elapsed() > Duration::from_millis(500) {
-                last_disconnect_check = Instant::now();
-                if let Ok(probe) = MidiInput::new("haydn-probe") {
-                    let ports = probe.ports();
-                    let still_connected = ports.iter().any(|p| {
-                        probe.port_name(p).ok().as_deref() == Some(connected_name.as_str())
-                    });
-                    if !still_connected {
-                        _conn = None;
-                        tui_state.connected = false;
-                        terminal.draw(|frame| display::render_dashboard(frame, &tui_state))?;
-                        _conn = Some(wait_for_reconnect(
-                            &connected_name,
-                            reconnect_tx.clone(),
-                            &running,
-                        )?);
-                        tui_state.connected = true;
-                        dirty = true;
-                    }
-                }
-            }
+            display::restore_terminal()?;
+        }
+    } else {
+        // ── MIDI mode (existing behavior) ───────────────────────────
+        let (tx, rx) = mpsc::channel::<MidiMsg>();
+        let connected_name;
+        let mut _conn: Option<midir::MidiInputConnection<mpsc::Sender<MidiMsg>>> = None;
+        let reconnect_tx = tx.clone();
 
-            // 4. Render if dirty or frame budget elapsed
-            if dirty || last_render.elapsed() >= frame_budget {
-                terminal.draw(|frame| display::render_dashboard(frame, &tui_state))?;
-                last_render = Instant::now();
-                dirty = false;
-            }
+        if cli.demo {
+            connected_name = "Demo (simulated)".to_string();
+            let demo_tx = tx.clone();
+            let demo_running = running.clone();
+            std::thread::spawn(move || {
+                run_demo_sequence(demo_tx, &demo_running);
+            });
+        } else {
+            let midi_in = MidiInput::new("haydn")?;
+            let (port, name) = select_midi_port(&midi_in, cli.midi_device.as_deref())?;
+            connected_name = name;
+            _conn = Some(midi_in.connect(&port, "haydn-input", midi_callback, tx.clone())?);
         }
 
-        display::restore_terminal()?;
+        if cli.quiet {
+            println!("Listening for MIDI input... (Ctrl+C to quit)\n");
+
+            while running.load(Ordering::Relaxed) {
+                match rx.recv_timeout(Duration::from_millis(500)) {
+                    Ok(MidiMsg::NoteOn { note, velocity }) => {
+                        for line in process_note(note, velocity, &mut engine, &mut vm) {
+                            println!("{}", line);
+                        }
+                    }
+                    Ok(MidiMsg::NoteOff { note }) => {
+                        println!("[{} released]", note_name(note));
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        if !cli.demo {
+                            if let Ok(probe) = MidiInput::new("haydn-probe") {
+                                let ports = probe.ports();
+                                let still_connected = ports.iter().any(|p| {
+                                    probe.port_name(p).ok().as_deref() == Some(connected_name.as_str())
+                                });
+                                if !still_connected {
+                                    _conn = None;
+                                    eprintln!("\n⚠ MIDI device disconnected. Waiting for device... (Ctrl+C to quit)");
+                                    _conn = Some(wait_for_reconnect(
+                                        &connected_name,
+                                        reconnect_tx.clone(),
+                                        &running,
+                                    )?);
+                                    eprintln!("✓ MIDI device reconnected. Resuming session.\n");
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        eprintln!("Channel disconnected unexpectedly. Ending session.");
+                        break;
+                    }
+                }
+            }
+        } else {
+            // TUI mode
+            let default_panic = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                let _ = crossterm::terminal::disable_raw_mode();
+                let _ = std::io::stdout().execute(crossterm::terminal::LeaveAlternateScreen);
+                default_panic(info);
+            }));
+
+            let mut terminal = display::init_terminal()?;
+            let mut tui_state = display::TuiState::new(
+                engine.metadata().name.clone(),
+                connected_name.clone(),
+                "MIDI".to_string(),
+            );
+
+            let frame_budget = Duration::from_millis(33);
+            let mut last_render = Instant::now();
+            let mut last_disconnect_check = Instant::now();
+            let mut dirty = true;
+
+            terminal.draw(|frame| display::render_dashboard(frame, &tui_state))?;
+
+            while running.load(Ordering::Relaxed) {
+                if ct_event::poll(Duration::from_millis(1))? {
+                    if let CtEvent::Key(key) = ct_event::read()? {
+                        if key.kind == KeyEventKind::Press && key.code == KeyCode::Char('q') {
+                            break;
+                        }
+                    }
+                }
+
+                loop {
+                    match rx.try_recv() {
+                        Ok(MidiMsg::NoteOn { note, velocity }) => {
+                            if let Some(results) = process_note_structured(note, &mut engine, &mut vm) {
+                                for result in &results {
+                                    tui_state.update_from_step(note, velocity, result);
+                                }
+                            } else {
+                                tui_state.history.push(display::HistoryEntry {
+                                    note_name: note_name(note),
+                                    velocity,
+                                    confidence: None,
+                                    operation: "(unmapped)".to_string(),
+                                    output_text: None,
+                                    edge_case: None,
+                                });
+                            }
+                            tui_state.loop_state = vm.loop_state_name().to_string();
+                            tui_state.update_stack_and_output(&vm);
+                            dirty = true;
+                        }
+                        Ok(MidiMsg::NoteOff { .. }) => {}
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                    }
+                }
+
+                if !cli.demo && last_disconnect_check.elapsed() > Duration::from_millis(500) {
+                    last_disconnect_check = Instant::now();
+                    if let Ok(probe) = MidiInput::new("haydn-probe") {
+                        let ports = probe.ports();
+                        let still_connected = ports.iter().any(|p| {
+                            probe.port_name(p).ok().as_deref() == Some(connected_name.as_str())
+                        });
+                        if !still_connected {
+                            _conn = None;
+                            tui_state.connected = false;
+                            terminal.draw(|frame| display::render_dashboard(frame, &tui_state))?;
+                            _conn = Some(wait_for_reconnect(
+                                &connected_name,
+                                reconnect_tx.clone(),
+                                &running,
+                            )?);
+                            tui_state.connected = true;
+                            dirty = true;
+                        }
+                    }
+                }
+
+                if dirty || last_render.elapsed() >= frame_budget {
+                    terminal.draw(|frame| display::render_dashboard(frame, &tui_state))?;
+                    last_render = Instant::now();
+                    dirty = false;
+                }
+            }
+
+            display::restore_terminal()?;
+        }
     }
 
     vm.close();
