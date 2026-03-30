@@ -8,6 +8,8 @@ pub use error::*;
 pub use engine::TuningEngine;
 
 const DEFAULT_PIANO_TOML: &str = include_str!("../tunings/piano.toml");
+const DEFAULT_VOICE_TOML: &str = include_str!("../tunings/voice.toml");
+const DEFAULT_GUITAR_TOML: &str = include_str!("../tunings/guitar.toml");
 
 /// Load a tuning from a TOML string.
 pub fn load_tuning(toml_content: &str) -> Result<TuningEngine, Vec<TuningError>> {
@@ -27,4 +29,16 @@ pub fn load_tuning_file(path: &std::path::Path) -> Result<TuningEngine, Vec<Tuni
 pub fn default_piano_tuning() -> TuningEngine {
     load_tuning(DEFAULT_PIANO_TOML)
         .expect("built-in piano tuning must be valid")
+}
+
+/// Load the built-in default voice tuning.
+pub fn default_voice_tuning() -> TuningEngine {
+    load_tuning(DEFAULT_VOICE_TOML)
+        .expect("built-in voice tuning must be valid")
+}
+
+/// Load the built-in default guitar tuning.
+pub fn default_guitar_tuning() -> TuningEngine {
+    load_tuning(DEFAULT_GUITAR_TOML)
+        .expect("built-in guitar tuning must be valid")
 }

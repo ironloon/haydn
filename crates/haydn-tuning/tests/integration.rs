@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use haydn_tuning::{default_piano_tuning, load_tuning};
+use haydn_tuning::{default_guitar_tuning, default_piano_tuning, default_voice_tuning, load_tuning};
 use haydn_vm::{Event, HaydnVm, Opcode};
 
 // ── Piano tuning tests ─────────────────────────────────────────────
@@ -319,5 +319,177 @@ mod vm_round_trip {
         vm.process_event(ev3);
 
         assert_eq!(vm.stack(), &[-10]); // -5 + -5
+    }
+}
+
+// ── Voice tuning tests ─────────────────────────────────────────────
+
+mod voice_tuning {
+    use super::*;
+
+    #[test]
+    fn loads_without_panic() {
+        let engine = default_voice_tuning();
+        let meta = engine.metadata();
+        assert_eq!(meta.name, "Default Voice");
+        assert_eq!(meta.root_note, 55);
+        assert_eq!(meta.instrument, "voice");
+    }
+
+    #[test]
+    fn maps_value_zone() {
+        let mut engine = default_voice_tuning();
+        // root_note = 55, value zone = [45, 54]
+        assert_eq!(engine.map_note(45), Some(Event::Push(-10))); // 45 - 55
+        assert_eq!(engine.map_note(50), Some(Event::Push(-5)));  // 50 - 55
+        assert_eq!(engine.map_note(54), Some(Event::Push(-1)));  // 54 - 55
+    }
+
+    #[test]
+    fn maps_all_19_opcodes() {
+        let mut engine = default_voice_tuning();
+        let op_notes: Vec<u8> = (55..=73).collect();
+        let mut opcodes = HashSet::new();
+        for note in op_notes {
+            if let Some(Event::Op(opcode)) = engine.map_note(note) {
+                opcodes.insert(opcode);
+            } else {
+                panic!("Expected Op event for MIDI note {note}");
+            }
+        }
+        assert_eq!(opcodes.len(), 19, "Expected all 19 opcodes, got {:?}", opcodes);
+    }
+
+    #[test]
+    fn specific_opcode_mappings() {
+        let mut engine = default_voice_tuning();
+        assert_eq!(engine.map_note(55), Some(Event::Op(Opcode::Add)));
+        assert_eq!(engine.map_note(60), Some(Event::Op(Opcode::Dup)));
+        assert_eq!(engine.map_note(69), Some(Event::Op(Opcode::Read)));
+        assert_eq!(engine.map_note(73), Some(Event::Op(Opcode::Load)));
+    }
+
+    #[test]
+    fn below_value_zone_unmapped() {
+        let mut engine = default_voice_tuning();
+        assert_eq!(engine.map_note(44), None);
+        assert_eq!(engine.map_note(0), None);
+    }
+
+    #[test]
+    fn above_operation_zone_unmapped() {
+        let mut engine = default_voice_tuning();
+        assert_eq!(engine.map_note(74), None);
+        assert_eq!(engine.map_note(127), None);
+    }
+
+    #[test]
+    fn audio_section_present() {
+        let engine = default_voice_tuning();
+        let audio = engine.audio_section().expect("voice tuning must have [audio]");
+        assert_eq!(audio.noise_gate_db, -35.0);
+        assert_eq!(audio.confidence_threshold, 0.5);
+        assert_eq!(audio.algorithm, "mcleod");
+    }
+}
+
+// ── Guitar tuning tests ────────────────────────────────────────────
+
+mod guitar_tuning {
+    use super::*;
+
+    #[test]
+    fn loads_without_panic() {
+        let engine = default_guitar_tuning();
+        let meta = engine.metadata();
+        assert_eq!(meta.name, "Default Guitar");
+        assert_eq!(meta.root_note, 52);
+        assert_eq!(meta.instrument, "guitar");
+    }
+
+    #[test]
+    fn maps_value_zone() {
+        let mut engine = default_guitar_tuning();
+        // root_note = 52, value zone = [40, 51]
+        assert_eq!(engine.map_note(40), Some(Event::Push(-12))); // 40 - 52
+        assert_eq!(engine.map_note(46), Some(Event::Push(-6)));  // 46 - 52
+        assert_eq!(engine.map_note(51), Some(Event::Push(-1)));  // 51 - 52
+    }
+
+    #[test]
+    fn maps_all_19_opcodes() {
+        let mut engine = default_guitar_tuning();
+        let op_notes: Vec<u8> = (52..=70).collect();
+        let mut opcodes = HashSet::new();
+        for note in op_notes {
+            if let Some(Event::Op(opcode)) = engine.map_note(note) {
+                opcodes.insert(opcode);
+            } else {
+                panic!("Expected Op event for MIDI note {note}");
+            }
+        }
+        assert_eq!(opcodes.len(), 19, "Expected all 19 opcodes, got {:?}", opcodes);
+    }
+
+    #[test]
+    fn specific_opcode_mappings() {
+        let mut engine = default_guitar_tuning();
+        assert_eq!(engine.map_note(52), Some(Event::Op(Opcode::Add)));
+        assert_eq!(engine.map_note(60), Some(Event::Op(Opcode::Rotate)));
+        assert_eq!(engine.map_note(69), Some(Event::Op(Opcode::Store)));
+        assert_eq!(engine.map_note(70), Some(Event::Op(Opcode::Load)));
+    }
+
+    #[test]
+    fn below_value_zone_unmapped() {
+        let mut engine = default_guitar_tuning();
+        assert_eq!(engine.map_note(39), None);
+        assert_eq!(engine.map_note(0), None);
+    }
+
+    #[test]
+    fn above_operation_zone_unmapped() {
+        let mut engine = default_guitar_tuning();
+        assert_eq!(engine.map_note(71), None);
+        assert_eq!(engine.map_note(127), None);
+    }
+
+    #[test]
+    fn audio_section_present() {
+        let engine = default_guitar_tuning();
+        let audio = engine.audio_section().expect("guitar tuning must have [audio]");
+        assert_eq!(audio.noise_gate_db, -45.0);
+        assert_eq!(audio.confidence_threshold, 0.75);
+        assert_eq!(audio.algorithm, "mcleod");
+    }
+}
+
+// ── Audio section tests for all built-in tunings ───────────────────
+
+mod audio_section {
+    use super::*;
+
+    #[test]
+    fn piano_has_audio_section() {
+        let engine = default_piano_tuning();
+        let audio = engine.audio_section().expect("piano tuning must have [audio]");
+        assert_eq!(audio.noise_gate_db, -40.0);
+    }
+
+    #[test]
+    fn all_builtins_value_zones_produce_push() {
+        let builtins: Vec<(&str, _, u8, u8)> = vec![
+            ("piano", default_piano_tuning(), 36, 59),
+            ("voice", default_voice_tuning(), 45, 54),
+            ("guitar", default_guitar_tuning(), 40, 51),
+        ];
+        for (name, mut engine, from, to) in builtins {
+            for note in from..=to {
+                match engine.map_note(note) {
+                    Some(Event::Push(_)) => {},
+                    other => panic!("{name}: note {note} expected Push, got {other:?}"),
+                }
+            }
+        }
     }
 }

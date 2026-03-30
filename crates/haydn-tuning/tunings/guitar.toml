@@ -1,0 +1,65 @@
+# ═══════════════════════════════════════════════════════════════════
+# Default Guitar Tuning
+# ═══════════════════════════════════════════════════════════════════
+#
+# For guitar through a microphone. Every semitone from E2 to Bb4 is
+# meaningful — dense chromatic mapping across the first position.
+#
+# Layout:
+#   Value zone (below root):  E2–D#3  (MIDI 40–51) → push -12 to -1
+#   Operation zone (at/above root): E3–Bb4 (MIDI 52–70) → all 19 opcodes
+#
+# Guitars have sharp transients, string noise, and harmonic overtones.
+# These defaults filter aggressively for clean note detection.
+
+[metadata]
+name = "Default Guitar"
+root_note = 52
+instrument = "guitar"
+
+# ── Values ──────────────────────────────────────────────────────────
+# 12 chromatic semitones below the root — a full octave of value notes.
+# Open low strings live here. Each note pushes (note - root_note).
+# E2 → -12, F2 → -11, ... D#3 → -1.
+[values]
+range = [40, 51]
+
+# ── Operations ──────────────────────────────────────────────────────
+# 19 chromatic semitones starting at the root. Dense mapping across
+# the first position and open strings of the upper register.
+[operations]
+52 = "add"           # E3  — root, open high E string equivalent
+53 = "sub"           # F3
+54 = "mul"           # F#3
+55 = "div"           # G3
+56 = "mod"           # G#3
+57 = "dup"           # A3
+58 = "swap"          # Bb3
+59 = "drop"          # B3
+60 = "rotate"        # C4
+61 = "eq"            # C#4
+62 = "gt"            # D4
+63 = "lt"            # Eb4
+64 = "print_char"    # E4
+65 = "print_num"     # F4
+66 = "read"          # F#4
+67 = "loop_start"    # G4
+68 = "loop_end"      # G#4
+69 = "store"         # A4  — concert pitch
+70 = "load"          # Bb4
+
+# ── Audio ───────────────────────────────────────────────────────────
+# Tuned for steel-string or nylon acoustic guitar through a microphone.
+#
+# Guitars produce sharp attacks with fast decay — the opposite of voice.
+# Onset detection is aggressive to catch plucks, but the noise gate is
+# low to handle the quieter upper frets and harmonics.
+#
+# String squeaks and fret buzz are the enemy here.
+[audio]
+noise_gate_db = -45.0           # Low gate — guitars can be quiet, especially harmonics
+onset_threshold_db = 8.0        # High threshold — sharp pluck transients, reject string noise
+pitch_stability_cents = 40.0    # Tight window — guitar pitch is relatively stable after attack
+min_note_ms = 60                # Short hold — fast passages and arpeggios need quick response
+confidence_threshold = 0.75     # High bar — guitar harmonics can confuse pitch detection
+algorithm = "mcleod"

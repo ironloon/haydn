@@ -1,0 +1,65 @@
+# ═══════════════════════════════════════════════════════════════════
+# Default Voice Tuning
+# ═══════════════════════════════════════════════════════════════════
+#
+# For singing into a microphone. Every semitone from A2 to C#5 is
+# meaningful — dense chromatic mapping with no dead zones.
+#
+# Layout:
+#   Value zone (below root):  A2–F#3  (MIDI 45–54) → push -10 to -1
+#   Operation zone (at/above root): G3–C#5 (MIDI 55–73) → all 19 opcodes
+#
+# The voice is the most expressive and least precise instrument.
+# These defaults lean toward forgiveness over accuracy.
+
+[metadata]
+name = "Default Voice"
+root_note = 55
+instrument = "voice"
+
+# ── Values ──────────────────────────────────────────────────────────
+# 10 chromatic semitones below the root. Sing low to push data.
+# Each note pushes (note - root_note), so A2 → -10, Bb2 → -9, ... F#3 → -1.
+[values]
+range = [45, 54]
+
+# ── Operations ──────────────────────────────────────────────────────
+# 19 chromatic semitones starting at the root. Every semitone is an opcode.
+# The singable range stays inside a comfortable octave-and-a-half.
+[operations]
+55 = "add"           # G3  — the root, the most natural starting note
+56 = "sub"           # G#3
+57 = "mul"           # A3
+58 = "div"           # Bb3
+59 = "mod"           # B3
+60 = "dup"           # C4  — middle C, easy to land on
+61 = "swap"          # C#4
+62 = "drop"          # D4
+63 = "rotate"        # Eb4
+64 = "eq"            # E4
+65 = "gt"            # F4
+66 = "lt"            # F#4
+67 = "print_char"    # G4  — one octave above root
+68 = "print_num"     # G#4
+69 = "read"          # A4  — concert pitch, the singer's anchor
+70 = "loop_start"    # Bb4
+71 = "loop_end"      # B4
+72 = "store"         # C5
+73 = "load"          # C#5
+
+# ── Audio ───────────────────────────────────────────────────────────
+# Tuned for human voice through a microphone.
+#
+# The voice is breathy, wobbly, and gloriously imprecise.
+# These parameters embrace that — generous thresholds that reward
+# expressiveness over robotic accuracy.
+#
+# Tighten pitch_stability_cents for operatic precision.
+# Loosen it further for expressionist chaos.
+[audio]
+noise_gate_db = -35.0           # Voices are loud; gate higher to reject room noise
+onset_threshold_db = 4.0        # Soft onsets — catch breathy entrances, not just belting
+pitch_stability_cents = 80.0    # Wide pitch window — vibrato and slides are features, not bugs
+min_note_ms = 120               # Hold notes longer to filter consonants and breath attacks
+confidence_threshold = 0.5      # Trust the singer — low bar lets expressive timbres through
+algorithm = "mcleod"

@@ -1,5 +1,5 @@
 use crate::error::TuningError;
-use crate::types::{parse_opcode, Metadata, RawEmit, RawTrigger, RawTuningFile};
+use crate::types::{parse_opcode, AudioSection, Metadata, RawEmit, RawTrigger, RawTuningFile};
 use crate::validate::validate;
 
 /// A compiled trigger condition.
@@ -33,6 +33,7 @@ pub struct TuningEngine {
     rules: Vec<CompiledRule>,
     root_note: u8,
     metadata: Metadata,
+    audio: Option<AudioSection>,
     last_note: Option<u8>,
 }
 
@@ -102,6 +103,7 @@ impl TuningEngine {
             rules,
             root_note,
             metadata,
+            audio: raw.audio.clone(),
             last_note: None,
         })
     }
@@ -147,6 +149,11 @@ impl TuningEngine {
     /// Get the root note.
     pub fn root_note(&self) -> u8 {
         self.root_note
+    }
+
+    /// Get the audio section from the tuning file, if present.
+    pub fn audio_section(&self) -> Option<&AudioSection> {
+        self.audio.as_ref()
     }
 
     /// Reset interval tracking state.
