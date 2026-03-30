@@ -107,6 +107,14 @@ impl HaydnVm {
         &self.stack
     }
 
+    pub fn loop_state_name(&self) -> &'static str {
+        match self.loop_state {
+            LoopState::Normal => "Normal",
+            LoopState::Recording => "Recording",
+            LoopState::Replaying => "Replaying",
+        }
+    }
+
     pub fn close(&mut self) {
         self.loop_stack.clear();
         self.replay_stack.clear();

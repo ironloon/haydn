@@ -1,5 +1,7 @@
 use std::sync::mpsc;
 
+pub mod display;
+
 pub use haydn_tuning;
 pub use haydn_vm;
 
