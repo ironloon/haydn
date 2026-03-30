@@ -2,13 +2,15 @@ use std::io::Write;
 use std::sync::mpsc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use clap::Parser;
+use crossterm::event::{self as ct_event, Event as CtEvent, KeyCode, KeyEventKind};
+use crossterm::ExecutableCommand;
 use midir::MidiInput;
 
-use haydn::{MidiMsg, midi_callback, note_name, process_note, format_session_summary};
+use haydn::{MidiMsg, display, midi_callback, note_name, process_note, process_note_structured, format_session_summary};
 
 #[derive(Parser, Debug)]
 #[command(name = "haydn", about = "Haydn — an esoteric programming language performed by music")]
@@ -24,6 +26,10 @@ struct Cli {
     /// Path to a tuning file (.toml). Defaults to built-in piano tuning.
     #[arg(long)]
     tuning: Option<std::path::PathBuf>,
+
+    /// Quiet mode — use scrolling text log instead of TUI dashboard
+    #[arg(long, short)]
+    quiet: bool,
 }
 
 fn select_midi_port(
@@ -177,19 +183,111 @@ fn main() -> Result<()> {
 
     // Main event loop
     let mut vm = haydn_vm::HaydnVm::new();
-    println!("Listening for MIDI input... (Ctrl+C to quit)\n");
 
-    while running.load(Ordering::Relaxed) {
-        match rx.recv_timeout(Duration::from_millis(500)) {
-            Ok(MidiMsg::NoteOn { note, velocity }) => {
-                for line in process_note(note, velocity, &mut engine, &mut vm) {
-                    println!("{}", line);
+    if cli.quiet {
+        // Quiet mode — existing scrolling text log (Phase 4 behavior)
+        println!("Listening for MIDI input... (Ctrl+C to quit)\n");
+
+        while running.load(Ordering::Relaxed) {
+            match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(MidiMsg::NoteOn { note, velocity }) => {
+                    for line in process_note(note, velocity, &mut engine, &mut vm) {
+                        println!("{}", line);
+                    }
+                }
+                Ok(MidiMsg::NoteOff { note }) => {
+                    println!("[{} released]", note_name(note));
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if let Ok(probe) = MidiInput::new("haydn-probe") {
+                        let ports = probe.ports();
+                        let still_connected = ports.iter().any(|p| {
+                            probe.port_name(p).ok().as_deref() == Some(connected_name.as_str())
+                        });
+                        if !still_connected {
+                            drop(conn);
+                            eprintln!("\n⚠ MIDI device disconnected. Waiting for device... (Ctrl+C to quit)");
+                            conn = wait_for_reconnect(
+                                &connected_name,
+                                reconnect_tx.clone(),
+                                &running,
+                            )?;
+                            eprintln!("✓ MIDI device reconnected. Resuming session.\n");
+                        }
+                    }
+                    continue;
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    eprintln!("Channel disconnected unexpectedly. Ending session.");
+                    break;
                 }
             }
-            Ok(MidiMsg::NoteOff { note }) => {
-                println!("[{} released]", note_name(note));
+        }
+    } else {
+        // TUI mode — real-time dashboard (default)
+
+        // Ensure terminal is restored on panic
+        let default_panic = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = crossterm::terminal::disable_raw_mode();
+            let _ = std::io::stdout().execute(crossterm::terminal::LeaveAlternateScreen);
+            default_panic(info);
+        }));
+
+        let mut terminal = display::init_terminal()?;
+        let mut tui_state = display::TuiState::new(
+            engine.metadata().name.clone(),
+            connected_name.clone(),
+        );
+
+        let frame_budget = Duration::from_millis(33); // ~30fps
+        let mut last_render = Instant::now();
+        let mut last_disconnect_check = Instant::now();
+        let mut dirty = true;
+
+        // Render initial empty state
+        terminal.draw(|frame| display::render_dashboard(frame, &tui_state))?;
+
+        while running.load(Ordering::Relaxed) {
+            // 1. Poll keyboard events (non-blocking)
+            if ct_event::poll(Duration::from_millis(1))? {
+                if let CtEvent::Key(key) = ct_event::read()? {
+                    if key.kind == KeyEventKind::Press && key.code == KeyCode::Char('q') {
+                        break;
+                    }
+                }
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
+
+            // 2. Drain all pending MIDI events (non-blocking)
+            loop {
+                match rx.try_recv() {
+                    Ok(MidiMsg::NoteOn { note, velocity }) => {
+                        if let Some(results) = process_note_structured(note, &mut engine, &mut vm) {
+                            for result in &results {
+                                tui_state.update_from_step(note, velocity, result);
+                            }
+                        } else {
+                            tui_state.history.push(display::HistoryEntry {
+                                note_name: note_name(note),
+                                velocity,
+                                operation: "(unmapped)".to_string(),
+                                output_text: None,
+                                edge_case: None,
+                            });
+                        }
+                        tui_state.loop_state = vm.loop_state_name().to_string();
+                        tui_state.update_stack_and_output(&vm);
+                        dirty = true;
+                    }
+                    Ok(MidiMsg::NoteOff { .. }) => {}
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                }
+            }
+
+            // 3. Check MIDI disconnect periodically (every 500ms)
+            if last_disconnect_check.elapsed() > Duration::from_millis(500) {
+                last_disconnect_check = Instant::now();
                 if let Ok(probe) = MidiInput::new("haydn-probe") {
                     let ports = probe.ports();
                     let still_connected = ports.iter().any(|p| {
@@ -197,22 +295,28 @@ fn main() -> Result<()> {
                     });
                     if !still_connected {
                         drop(conn);
-                        eprintln!("\n⚠ MIDI device disconnected. Waiting for device... (Ctrl+C to quit)");
+                        tui_state.connected = false;
+                        terminal.draw(|frame| display::render_dashboard(frame, &tui_state))?;
                         conn = wait_for_reconnect(
                             &connected_name,
                             reconnect_tx.clone(),
                             &running,
                         )?;
-                        eprintln!("✓ MIDI device reconnected. Resuming session.\n");
+                        tui_state.connected = true;
+                        dirty = true;
                     }
                 }
-                continue;
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                eprintln!("Channel disconnected unexpectedly. Ending session.");
-                break;
+
+            // 4. Render if dirty or frame budget elapsed
+            if dirty || last_render.elapsed() >= frame_budget {
+                terminal.draw(|frame| display::render_dashboard(frame, &tui_state))?;
+                last_render = Instant::now();
+                dirty = false;
             }
         }
+
+        display::restore_terminal()?;
     }
 
     vm.close();

@@ -123,3 +123,11 @@ pub fn process_note(
         }
     }
 }
+
+pub fn process_note_structured(
+    note: u8,
+    engine: &mut haydn_tuning::TuningEngine,
+    vm: &mut haydn_vm::HaydnVm,
+) -> Option<Vec<haydn_vm::StepResult>> {
+    engine.map_note(note).map(|event| vm.process_event(event))
+}
