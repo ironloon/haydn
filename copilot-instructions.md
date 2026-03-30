@@ -128,7 +128,16 @@ Haydn is an esoteric programming language performed by singing or playing a musi
 <!-- GSD:conventions-start source:CONVENTIONS.md -->
 ## Conventions
 
-Conventions not yet established. Will populate as patterns emerge during development.
+### Self-Verify Before Handoff
+
+Never present code, features, or demos to the human without running them first. If the project has a CLI, run it and inspect the output. If there's a `--quiet` or text-only mode, use that to get machine-readable results. If tests exist, run them. The human should never be the first person to discover a runtime bug that the agent could have caught by executing the code.
+
+Concretely:
+- After building a new feature with any runnable entry point, **run it** and check the output makes sense.
+- After writing a demo/example sequence, **execute it** and verify the output matches expectations before committing or presenting.
+- If a TUI or interactive mode makes output hard to read, use a quiet/text fallback to verify programmatic correctness first.
+- Treat "it compiles and tests pass" as necessary but not sufficient — integration-level smoke tests via the actual binary are required when the change touches user-facing behavior.
+
 <!-- GSD:conventions-end -->
 
 <!-- GSD:architecture-start source:ARCHITECTURE.md -->
