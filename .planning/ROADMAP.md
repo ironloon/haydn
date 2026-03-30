@@ -140,7 +140,11 @@ Plans:
   1. User can perform via microphone and see real-time computation through the full pipeline (audio → tuning → VM → TUI)
   2. Default voice tuning works for singing into a microphone — vocal ranges map to a usable instruction set
   3. Default guitar tuning works for acoustic guitar played into a microphone
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [x] 07-01-PLAN.md — Instrument tuning files (voice.toml, guitar.toml) + loaders + AudioSection accessor
+- [ ] 07-02-PLAN.md — Audio types + Cargo dep + AudioConfig helper + TUI display model
+- [ ] 07-03-PLAN.md — CLI flags + main loop dual-input + signal level + disconnect/reconnect
 
 ### Phase 8: Example Programs & Content
 **Goal**: Compelling demo programs and documentation that showcase Haydn to the esolang and music-tech communities
