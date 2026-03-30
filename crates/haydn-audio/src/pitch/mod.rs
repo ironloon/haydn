@@ -1,3 +1,9 @@
+pub mod mcleod;
+pub mod yin;
+
+pub use mcleod::McLeodDetector;
+pub use yin::YinDetector;
+
 /// A single pitch detection result.
 #[derive(Debug, Clone)]
 pub struct PitchEstimate {
