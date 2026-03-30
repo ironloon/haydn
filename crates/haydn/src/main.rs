@@ -30,6 +30,10 @@ struct Cli {
     /// Quiet mode — use scrolling text log instead of TUI dashboard
     #[arg(long, short)]
     quiet: bool,
+
+    /// Demo mode — simulate MIDI input without hardware
+    #[arg(long)]
+    demo: bool,
 }
 
 fn select_midi_port(
@@ -134,6 +138,40 @@ fn wait_for_reconnect(
     }
 }
 
+/// Simulate a MIDI performance: pushes values, does arithmetic, prints output.
+/// Sends NoteOn events through the channel with human-like timing.
+fn run_demo_sequence(tx: mpsc::Sender<MidiMsg>, running: &Arc<AtomicBool>) {
+    // Piano tuning: notes 36-59 push values 0-23, operations on white keys 60+
+    // This sequence computes and prints "H" (72 = 8*9), "i" (105 = 7*15), "!" (33 = 3*11)
+    let sequence: Vec<(u8, u64)> = vec![
+        // Push 8, Push 9, Mul → 72 ('H'), PrintChar
+        (44, 400), (45, 400), (67, 500), (81, 600),
+        // Push 7, Push 15, Mul → 105 ('i'), PrintChar
+        (43, 400), (51, 400), (67, 500), (81, 600),
+        // Push 3, Push 11, Mul → 33 ('!'), PrintChar
+        (39, 400), (47, 400), (67, 500), (81, 600),
+        // Push 10, Push 10, Add → 20, Dup, Add → 40, PrintNum
+        (46, 400), (46, 300), (60, 400), (64, 300), (60, 400), (83, 600),
+        // Push 5 — leave on stack to show stack panel
+        (41, 400),
+        // Push 2, Push 3 — more stack items
+        (38, 400), (39, 500),
+    ];
+
+    // Small initial delay so TUI renders empty state first
+    std::thread::sleep(Duration::from_millis(800));
+
+    for (note, delay_ms) in sequence {
+        if !running.load(Ordering::Relaxed) {
+            return;
+        }
+        let _ = tx.send(MidiMsg::NoteOn { note, velocity: 80 });
+        std::thread::sleep(Duration::from_millis(delay_ms));
+    }
+
+    // Keep running so user can inspect the final state (quit with 'q')
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -165,14 +203,8 @@ fn main() -> Result<()> {
     };
     println!("Tuning: {} (root={})", engine.metadata().name, note_name(engine.root_note()));
 
-    // Select MIDI device
-    let midi_in = MidiInput::new("haydn")?;
-    let (port, connected_name) = select_midi_port(&midi_in, cli.midi_device.as_deref())?;
-
-    // Set up channel and connect
+    // Set up channel
     let (tx, rx) = mpsc::channel::<MidiMsg>();
-    let reconnect_tx = tx.clone();
-    let mut conn = midi_in.connect(&port, "haydn-input", midi_callback, tx)?;
 
     // Ctrl+C handler
     let running = Arc::new(AtomicBool::new(true));
@@ -180,6 +212,25 @@ fn main() -> Result<()> {
     ctrlc::set_handler(move || {
         r.store(false, Ordering::Relaxed);
     })?;
+
+    // MIDI source: real device or demo simulator
+    let connected_name;
+    let mut _conn: Option<midir::MidiInputConnection<mpsc::Sender<MidiMsg>>> = None;
+    let reconnect_tx = tx.clone();
+
+    if cli.demo {
+        connected_name = "Demo (simulated)".to_string();
+        let demo_tx = tx.clone();
+        let demo_running = running.clone();
+        std::thread::spawn(move || {
+            run_demo_sequence(demo_tx, &demo_running);
+        });
+    } else {
+        let midi_in = MidiInput::new("haydn")?;
+        let (port, name) = select_midi_port(&midi_in, cli.midi_device.as_deref())?;
+        connected_name = name;
+        _conn = Some(midi_in.connect(&port, "haydn-input", midi_callback, tx.clone())?);
+    }
 
     // Main event loop
     let mut vm = haydn_vm::HaydnVm::new();
@@ -199,20 +250,22 @@ fn main() -> Result<()> {
                     println!("[{} released]", note_name(note));
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if let Ok(probe) = MidiInput::new("haydn-probe") {
-                        let ports = probe.ports();
-                        let still_connected = ports.iter().any(|p| {
-                            probe.port_name(p).ok().as_deref() == Some(connected_name.as_str())
-                        });
-                        if !still_connected {
-                            drop(conn);
-                            eprintln!("\n⚠ MIDI device disconnected. Waiting for device... (Ctrl+C to quit)");
-                            conn = wait_for_reconnect(
-                                &connected_name,
-                                reconnect_tx.clone(),
-                                &running,
-                            )?;
-                            eprintln!("✓ MIDI device reconnected. Resuming session.\n");
+                    if !cli.demo {
+                        if let Ok(probe) = MidiInput::new("haydn-probe") {
+                            let ports = probe.ports();
+                            let still_connected = ports.iter().any(|p| {
+                                probe.port_name(p).ok().as_deref() == Some(connected_name.as_str())
+                            });
+                            if !still_connected {
+                                _conn = None;
+                                eprintln!("\n⚠ MIDI device disconnected. Waiting for device... (Ctrl+C to quit)");
+                                _conn = Some(wait_for_reconnect(
+                                    &connected_name,
+                                    reconnect_tx.clone(),
+                                    &running,
+                                )?);
+                                eprintln!("✓ MIDI device reconnected. Resuming session.\n");
+                            }
                         }
                     }
                     continue;
@@ -285,8 +338,8 @@ fn main() -> Result<()> {
                 }
             }
 
-            // 3. Check MIDI disconnect periodically (every 500ms)
-            if last_disconnect_check.elapsed() > Duration::from_millis(500) {
+            // 3. Check MIDI disconnect periodically (every 500ms, skip in demo mode)
+            if !cli.demo && last_disconnect_check.elapsed() > Duration::from_millis(500) {
                 last_disconnect_check = Instant::now();
                 if let Ok(probe) = MidiInput::new("haydn-probe") {
                     let ports = probe.ports();
@@ -294,14 +347,14 @@ fn main() -> Result<()> {
                         probe.port_name(p).ok().as_deref() == Some(connected_name.as_str())
                     });
                     if !still_connected {
-                        drop(conn);
+                        _conn = None;
                         tui_state.connected = false;
                         terminal.draw(|frame| display::render_dashboard(frame, &tui_state))?;
-                        conn = wait_for_reconnect(
+                        _conn = Some(wait_for_reconnect(
                             &connected_name,
                             reconnect_tx.clone(),
                             &running,
-                        )?;
+                        )?);
                         tui_state.connected = true;
                         dirty = true;
                     }
