@@ -141,21 +141,25 @@ fn wait_for_reconnect(
 /// Simulate a MIDI performance: pushes values, does arithmetic, prints output.
 /// Sends NoteOn events through the channel with human-like timing.
 fn run_demo_sequence(tx: mpsc::Sender<MidiMsg>, running: &Arc<AtomicBool>) {
-    // Piano tuning: notes 36-59 push values 0-23, operations on white keys 60+
-    // This sequence computes and prints "H" (72 = 8*9), "i" (105 = 7*15), "!" (33 = 3*11)
+    // Piano tuning: notes 36-59 push values (note - 60), so all negative (-24..-1).
+    // Operations on white keys 60+. To get positive ASCII, multiply two negatives.
+    //
+    // Note map: 52=E3→-8, 51=Eb3→-9, 53=F3→-7, 45=A2→-15, 57=A3→-3, 49=C#3→-11
+    //           55=G3→-5
+    // Ops:      60=Add, 62=Sub, 64=Dup, 67=Mul, 81=PrintChar, 83=PrintNum
     let sequence: Vec<(u8, u64)> = vec![
-        // Push 8, Push 9, Mul → 72 ('H'), PrintChar
-        (44, 400), (45, 400), (67, 500), (81, 600),
-        // Push 7, Push 15, Mul → 105 ('i'), PrintChar
-        (43, 400), (51, 400), (67, 500), (81, 600),
-        // Push 3, Push 11, Mul → 33 ('!'), PrintChar
-        (39, 400), (47, 400), (67, 500), (81, 600),
-        // Push 10, Push 10, Add → 20, Dup, Add → 40, PrintNum
-        (46, 400), (46, 300), (60, 400), (64, 300), (60, 400), (83, 600),
-        // Push 5 — leave on stack to show stack panel
-        (41, 400),
-        // Push 2, Push 3 — more stack items
-        (38, 400), (39, 500),
+        // Push -8, Push -9, Mul → 72 ('H'), PrintChar
+        (52, 400), (51, 400), (67, 500), (81, 600),
+        // Push -7, Push -15, Mul → 105 ('i'), PrintChar
+        (53, 400), (45, 400), (67, 500), (81, 600),
+        // Push -3, Push -11, Mul → 33 ('!'), PrintChar
+        (57, 400), (49, 400), (67, 500), (81, 600),
+        // Push -5, Push -5, Mul → 25, PrintNum
+        (55, 400), (55, 300), (67, 400), (83, 600),
+        // Push -5, Dup, Mul → 25, leave on stack to show panel
+        (55, 400), (64, 300), (67, 500),
+        // Push -3, Push -2 — more visible stack items
+        (57, 400), (58, 500),
     ];
 
     // Small initial delay so TUI renders empty state first
