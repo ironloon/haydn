@@ -144,7 +144,7 @@ Plans:
 Plans:
 - [x] 07-01-PLAN.md — Instrument tuning files (voice.toml, guitar.toml) + loaders + AudioSection accessor
 - [x] 07-02-PLAN.md — Audio types + Cargo dep + AudioConfig helper + TUI display model
-- [ ] 07-03-PLAN.md — CLI flags + main loop dual-input + signal level + disconnect/reconnect
+- [x] 07-03-PLAN.md — CLI flags + main loop dual-input + signal level + disconnect/reconnect
 
 ### Phase 8: Example Programs & Content
 **Goal**: Compelling demo programs and documentation that showcase Haydn to the esolang and music-tech communities
