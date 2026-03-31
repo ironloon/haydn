@@ -158,8 +158,8 @@ Plans:
 **Plans**: 3 plans
 Plans:
 - [x] 08-01-PLAN.md — Example programs (Hello World, Cat, Truth Machine, FizzBuzz) + integration tests
-- [ ] 08-02-PLAN.md — README in satirical academic paper style
-- [ ] 08-03-PLAN.md — Esolang wiki page draft
+- [x] 08-02-PLAN.md — README in satirical academic paper style
+- [x] 08-03-PLAN.md — Esolang wiki page draft
 
 ### Phase 9: Distribution & Release
 **Goal**: Users can install and run Haydn on any major OS with a clean CLI experience
