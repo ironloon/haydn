@@ -9,7 +9,7 @@ keywords = ["esoteric", "programming-language", "music", "tuning"]
 categories = ["compilers"]
 
 [dependencies]
-haydn-vm = { path = "../haydn-vm" }
+haydn-vm = { path = "../haydn-vm", version = "0.0.1" }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 thiserror = "2"

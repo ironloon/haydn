@@ -9,9 +9,9 @@ keywords = ["esoteric", "programming-language", "music"]
 categories = ["compilers"]
 
 [dependencies]
-haydn-vm = { path = "../haydn-vm" }
-haydn-tuning = { path = "../haydn-tuning" }
-haydn-audio = { path = "../haydn-audio" }
+haydn-vm = { path = "../haydn-vm", version = "0.0.1" }
+haydn-tuning = { path = "../haydn-tuning", version = "0.0.1" }
+haydn-audio = { path = "../haydn-audio", version = "0.0.1" }
 cpal = "0.15"
 midir = "0.10"
 midly = "0.5"
