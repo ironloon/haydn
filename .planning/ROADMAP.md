@@ -170,7 +170,11 @@ Plans:
   2. Binary runs correctly on macOS, Linux, and Windows
   3. `haydn --input midi` and `haydn --input mic` start a performance session with the correct input source
   4. User can select a tuning file via `--tuning` flag and list available MIDI devices and audio inputs
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [x] 09-01-PLAN.md — Cargo.toml metadata audit, version pins, repo URL fix
+- [ ] 09-02-PLAN.md — GitHub Actions CI + tag-triggered release workflow
+- [ ] 09-03-PLAN.md — LLM acknowledgments, release checklist, final verification
 
 ## Progress
 
