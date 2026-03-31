@@ -155,7 +155,11 @@ Plans:
   2. FizzBuzz, Cat program, and Truth Machine are performable examples with tuning files and instructions
   3. README is fun, irreverent, and technically precise — in the tradition of great esolangs
   4. Esolang wiki page exists with spec summary, instruction table, examples, and interpreter link
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [x] 08-01-PLAN.md — Example programs (Hello World, Cat, Truth Machine, FizzBuzz) + integration tests
+- [ ] 08-02-PLAN.md — README in satirical academic paper style
+- [ ] 08-03-PLAN.md — Esolang wiki page draft
 
 ### Phase 9: Distribution & Release
 **Goal**: Users can install and run Haydn on any major OS with a clean CLI experience
@@ -182,7 +186,7 @@ Note: Phase 6 can begin after Phase 2 (parallel with Phases 3-5 if desired).
 | 4. MIDI Input Pipeline | 0/0 | Not started | - |
 | 5. CLI Visualization | 0/0 | Not started | - |
 | 6. Audio Capture & Pitch Detection | 0/0 | Not started | - |
-| 7. Audio Integration & Instrument Tunings | 0/0 | Not started | - |
+| 7. Audio Integration & Instrument Tunings | 3/3 | Complete | 2026-03-30 |
 | 8. Example Programs & Content | 0/0 | Not started | - |
 | 9. Distribution & Release | 0/0 | Not started | - |
 
