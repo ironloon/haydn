@@ -157,6 +157,10 @@ Haydn is not a practical programming language. It is a serious one. The distinct
 - [FizzBuzz](examples/fizzbuzz.md) — Turing completeness via BF reduction
 - [Esolang Wiki Draft](docs/esolang-wiki.md) — Community reference page (working paper)
 
+## Acknowledgments
+
+The authors gratefully acknowledge the assistance of large language models during the development of this work. Their contributions to implementation, documentation, and the navigating of particularly opaque compiler diagnostics were, on the whole, adequate.
+
 ## License
 
 MIT

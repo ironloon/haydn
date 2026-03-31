@@ -136,6 +136,10 @@ Tuning files are TOML configuration files that map MIDI notes (or detected audio
 
 Users can create custom tunings to map any instrument's gestures to any combination of pushes and operations. The tuning file format is documented separately.
 
+## Acknowledgments
+
+The authors acknowledge the assistance of large language models in the preparation of this manuscript and its accompanying implementation.
+
 ## External Resources
 
 - **Interpreter:** `cargo install haydn` (Rust, MIT license)
