@@ -435,6 +435,62 @@ pub fn additive_sample_evolved(
     }
 }
 
+/// Generate one sample of additive synthesis with inharmonicity and spectral evolution.
+///
+/// `inharmonicity_b`: the B coefficient for this note's pitch. When B > 0,
+/// harmonic n has frequency f_n = n * f * sqrt(1 + B * n²), stretching upper
+/// partials sharp — the characteristic piano sound.
+pub fn additive_sample_inharmonic(
+    phase: f32,
+    frequency: f32,
+    sample_rate: u32,
+    harmonics: &[f32],
+    brightness: f32,
+    inharmonicity_b: f32,
+) -> f32 {
+    let nyquist = sample_rate as f32 / 2.0;
+    let two_pi = 2.0 * std::f32::consts::PI;
+    let mut sum = 0.0f32;
+    let mut weight_sum = 0.0f32;
+
+    for (i, &amp) in harmonics.iter().enumerate() {
+        let n = (i + 1) as f32;
+        // Inharmonic frequency: f_n = n * f * sqrt(1 + B * n²)
+        let inharm_factor = if inharmonicity_b > 0.0 {
+            (1.0 + inharmonicity_b * n * n).sqrt()
+        } else {
+            1.0
+        };
+        let harmonic_freq = frequency * n * inharm_factor;
+        if harmonic_freq >= nyquist {
+            break;
+        }
+        let brightness_scale = if i > 0 && brightness > 1.0 {
+            brightness.powf(n.ln() / 2.0_f32.ln())
+        } else {
+            1.0
+        };
+        let scaled_amp = amp * brightness_scale;
+        // Use the inharmonic frequency for the phase calculation
+        let harmonic_phase = harmonic_freq * phase / frequency;
+        sum += scaled_amp * (two_pi * harmonic_phase).sin();
+        weight_sum += scaled_amp;
+    }
+
+    if weight_sum > 0.0 { sum / weight_sum } else { 0.0 }
+}
+
+/// Compute the inharmonicity B coefficient for a given MIDI note,
+/// interpolating between low (A0) and high (C8) values.
+pub fn inharmonicity_b_for_note(midi_note: u8, b_low: f32, b_high: f32) -> f32 {
+    if b_low == 0.0 && b_high == 0.0 {
+        return 0.0;
+    }
+    let t = ((midi_note as f32) - 21.0) / (108.0 - 21.0);
+    let t = t.clamp(0.0, 1.0);
+    b_low + t * (b_high - b_low)
+}
+
 /// Simple filtered noise generator for attack transients.
 /// Uses a deterministic hash so it's reproducible per sample index.
 pub struct NoiseGenerator {
@@ -580,5 +636,29 @@ mod tests {
             .map(|(a, b)| (a - b).abs())
             .sum();
         assert!(diff > 1.0, "different highpass settings should produce different noise");
+    }
+
+    #[test]
+    fn test_inharmonicity_stretches_partials() {
+        // With B > 0, upper harmonics should be sharper, changing the waveform
+        let harmonics = &[1.0, 0.5, 0.33, 0.25, 0.15];
+        let mut diff_sum = 0.0f32;
+        for i in 0..500 {
+            let phase = 440.0 * i as f32 / 44100.0;
+            let pure = additive_sample_evolved(phase, 440.0, 44100, harmonics, 1.0);
+            let inharm = additive_sample_inharmonic(phase, 440.0, 44100, harmonics, 1.0, 0.005);
+            diff_sum += (pure - inharm).abs();
+        }
+        assert!(diff_sum > 0.1, "inharmonicity should change signal, diff={}", diff_sum);
+    }
+
+    #[test]
+    fn test_inharmonicity_b_interpolation() {
+        assert_eq!(inharmonicity_b_for_note(21, 0.0002, 0.008), 0.0002); // A0
+        assert_eq!(inharmonicity_b_for_note(108, 0.0002, 0.008), 0.008); // C8
+        let mid = inharmonicity_b_for_note(64, 0.0002, 0.008);
+        assert!(mid > 0.0002 && mid < 0.008, "mid-range B={}", mid);
+        // Zero B for non-piano
+        assert_eq!(inharmonicity_b_for_note(60, 0.0, 0.0), 0.0);
     }
 }
