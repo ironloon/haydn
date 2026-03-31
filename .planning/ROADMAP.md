@@ -243,6 +243,25 @@ Plans:
 Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
 
+### Phase 999.4: Perform-and-Interpret Pipeline (BACKLOG)
+
+**Goal:** Combined mode where haydn-performer plays a .ly score through the synth (so you hear it) while simultaneously feeding each MIDI note through the haydn tuning engine + VM (so you see it interpreted as a program). One command: hear the music AND watch the computation in real time.
+
+**Context & Notes:**
+- Currently performer and interpreter are separate binaries with no direct bridge
+- Performer already parses .ly → NoteSequence with MIDI note numbers and durations
+- Interpreter already maps MIDI notes → tuning → VM via `process_note()`
+- Pipeline would: parse score → for each note, synthesize audio AND feed through VM → display program output alongside playback
+- Could be a `--interpret` flag on haydn-performer, or a new `haydn play` subcommand
+- Enables the "this is what programming sounds like" demo without requiring MIDI hardware
+- Key UX question: TUI showing both performer progress AND VM state (stack, output)?
+
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd-review-backlog when ready)
+
 ---
 *Roadmap created: 2026-03-28*
 *Last updated: 2026-03-31*
