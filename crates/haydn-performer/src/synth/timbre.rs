@@ -61,6 +61,56 @@ pub struct InstrumentProfile {
     /// Inter-note gap in ms (tiny silence before non-legato notes).
     /// 0 = no gap (organ, legato). ~15-30ms for most instruments.
     pub articulation_gap_ms: f32,
+
+    // Phase 10: Inharmonicity (per D-03)
+    /// Inharmonicity coefficient B at lowest note (A0, MIDI 21). 0.0 = perfect harmonics.
+    pub inharmonicity_b_low: f32,
+    /// Inharmonicity coefficient B at highest note (C8, MIDI 108).
+    pub inharmonicity_b_high: f32,
+
+    // Phase 10: Stochastic micro-variation (per D-03)
+    /// Pitch jitter in cents (±). 0 = no jitter. 2.0 = ±2 cents.
+    pub pitch_jitter_cents: f32,
+    /// Amplitude jitter as fraction (±). 0.05 = ±5%.
+    pub amplitude_jitter: f32,
+    /// Timing jitter in ms (±). 0 = no jitter. 10.0 = ±10ms.
+    pub timing_jitter_ms: f32,
+
+    // Phase 10: Sympathetic resonance (per D-03)
+    /// Gain for sympathetic resonance between simultaneous notes. 0.0 = off.
+    pub sympathetic_resonance_gain: f32,
+
+    // Phase 10: Release modeling (per D-03)
+    /// Noise amplitude during release phase (damper thump, bow lift).
+    pub release_noise: f32,
+    /// Duration of release noise burst in ms.
+    pub release_noise_ms: f32,
+    /// Pitch drop in cents during release (air column emptying). 0 = none.
+    pub release_pitch_drop_cents: f32,
+
+    // Phase 10: Per-note spectral evolution (per D-03)
+    /// Brightness decay time at lowest note (longer = slower spectral evolution).
+    pub brightness_decay_ms_low: f32,
+    /// Brightness decay time at highest note (shorter = faster spectral evolution).
+    pub brightness_decay_ms_high: f32,
+
+    // Phase 10: Sustain noise/modulation (per D-04 instrument-specific techniques)
+    /// Ongoing noise during sustain (bow friction, breath). 0.0 = off.
+    pub sustain_noise: f32,
+    /// High-pass filter coefficient for sustain noise.
+    pub sustain_noise_highpass: f32,
+    /// Rate of slow harmonic amplitude modulation in Hz (spectral shimmer). 0 = off.
+    pub harmonic_modulation_rate: f32,
+    /// Depth of harmonic amplitude modulation as fraction.
+    pub harmonic_modulation_depth: f32,
+
+    // Phase 10: EQ and stereo (per D-09)
+    /// Parametric EQ bands: (center_freq_hz, gain_db, Q). Applied post-synthesis.
+    pub eq_bands: &'static [(f32, f32, f32)],
+    /// Stereo pan position: -1.0 = full left, 0.0 = center, +1.0 = full right.
+    pub stereo_pan: f32,
+    /// Stereo width: 0.0 = mono, 1.0 = full Haas width.
+    pub stereo_width: f32,
 }
 
 impl Instrument {
@@ -85,6 +135,25 @@ impl Instrument {
                 attack_noise_ms: 15.0,
                 noise_highpass: 0.3,     // low, thumpy noise
                 articulation_gap_ms: 10.0,
+                // Phase 10
+                inharmonicity_b_low: 0.0002,
+                inharmonicity_b_high: 0.008,
+                pitch_jitter_cents: 1.5,
+                amplitude_jitter: 0.04,
+                timing_jitter_ms: 5.0,
+                sympathetic_resonance_gain: 0.04,
+                release_noise: 0.06,
+                release_noise_ms: 20.0,
+                release_pitch_drop_cents: 0.0,
+                brightness_decay_ms_low: 150.0,
+                brightness_decay_ms_high: 40.0,
+                sustain_noise: 0.0,
+                sustain_noise_highpass: 0.0,
+                harmonic_modulation_rate: 0.0,
+                harmonic_modulation_depth: 0.0,
+                eq_bands: &[(350.0, 2.0, 1.0), (3000.0, 1.0, 1.5)],
+                stereo_pan: 0.0,
+                stereo_width: 0.8,
             },
             Instrument::Strings => InstrumentProfile {
                 // Strings ensemble: rich overtones, slow bow
@@ -105,11 +174,27 @@ impl Instrument {
                 attack_noise_ms: 60.0,
                 noise_highpass: 0.5,
                 articulation_gap_ms: 5.0,  // legato-ish
+                // Phase 10
+                inharmonicity_b_low: 0.0,
+                inharmonicity_b_high: 0.0,
+                pitch_jitter_cents: 2.0,
+                amplitude_jitter: 0.05,
+                timing_jitter_ms: 8.0,
+                sympathetic_resonance_gain: 0.03,
+                release_noise: 0.02,
+                release_noise_ms: 30.0,
+                release_pitch_drop_cents: 3.0,
+                brightness_decay_ms_low: 180.0,
+                brightness_decay_ms_high: 80.0,
+                sustain_noise: 0.015,
+                sustain_noise_highpass: 0.4,
+                harmonic_modulation_rate: 0.3,
+                harmonic_modulation_depth: 0.08,
+                eq_bands: &[(300.0, 3.0, 1.0), (5000.0, -3.0, 0.8)],
+                stereo_pan: -0.15,
+                stereo_width: 0.9,
             },
             Instrument::Cello => InstrumentProfile {
-                // Cello: bowed string produces sawtooth-like waveform (all harmonics, ~1/n decay)
-                // Strong low partials give warmth; gradual rolloff gives richness
-                // Extended to 16 harmonics for the characteristic "body" of the cello
                 harmonics: &[1.0, 0.90, 0.65, 0.50, 0.38, 0.28, 0.22, 0.17, 0.13, 0.10, 0.08, 0.06, 0.05, 0.04, 0.03, 0.025],
                 attack_ms: 100.0,        // bow draw is slow and gradual
                 decay_ms: 40.0,
@@ -117,8 +202,8 @@ impl Instrument {
                 release_ms: 300.0,       // bow lift — gradual, not abrupt
                 adsr_curve: 1.2,         // nearly linear — bow pressure is smooth
                 vibrato_rate: 5.8,       // typical cello vibrato ~5.5-6Hz
-                vibrato_depth: 0.0005,   // very narrow: ~±0.08 semitone — barely perceptible pitch shift
-                vibrato_onset_ms: 800.0, // cellists wait almost a full second before adding vibrato
+                vibrato_depth: 0.0005,   // very narrow: ~±0.08 semitone
+                vibrato_onset_ms: 800.0, // cellists wait almost a full second
                 tremolo_rate: 0.0,
                 tremolo_depth: 0.0,
                 attack_brightness: 1.3,  // very subtle — bow catches string gently
@@ -127,6 +212,25 @@ impl Instrument {
                 attack_noise_ms: 80.0,   // spread over longer window
                 noise_highpass: 0.25,    // low, warm rosin character
                 articulation_gap_ms: 2.0,  // nearly seamless legato
+                // Phase 10
+                inharmonicity_b_low: 0.0,
+                inharmonicity_b_high: 0.0,
+                pitch_jitter_cents: 1.5,
+                amplitude_jitter: 0.04,
+                timing_jitter_ms: 6.0,
+                sympathetic_resonance_gain: 0.03,
+                release_noise: 0.015,
+                release_noise_ms: 40.0,
+                release_pitch_drop_cents: 2.0,
+                brightness_decay_ms_low: 200.0,
+                brightness_decay_ms_high: 100.0,
+                sustain_noise: 0.012,
+                sustain_noise_highpass: 0.25,
+                harmonic_modulation_rate: 0.25,
+                harmonic_modulation_depth: 0.06,
+                eq_bands: &[(250.0, 3.0, 1.0), (2500.0, 2.0, 1.2)],
+                stereo_pan: 0.15,
+                stereo_width: 0.85,
             },
             Instrument::Flute => InstrumentProfile {
                 // Flute: nearly sinusoidal
@@ -147,6 +251,25 @@ impl Instrument {
                 attack_noise_ms: 45.0,
                 noise_highpass: 0.7,     // airy, hissy
                 articulation_gap_ms: 20.0,
+                // Phase 10
+                inharmonicity_b_low: 0.0,
+                inharmonicity_b_high: 0.0,
+                pitch_jitter_cents: 2.5,
+                amplitude_jitter: 0.06,
+                timing_jitter_ms: 8.0,
+                sympathetic_resonance_gain: 0.0,
+                release_noise: 0.04,
+                release_noise_ms: 25.0,
+                release_pitch_drop_cents: 5.0,
+                brightness_decay_ms_low: 100.0,
+                brightness_decay_ms_high: 40.0,
+                sustain_noise: 0.04,
+                sustain_noise_highpass: 0.7,
+                harmonic_modulation_rate: 0.5,
+                harmonic_modulation_depth: 0.10,
+                eq_bands: &[(3000.0, 2.0, 1.5), (8000.0, 3.0, 0.8)],
+                stereo_pan: -0.25,
+                stereo_width: 0.7,
             },
             Instrument::Organ => InstrumentProfile {
                 // Organ: pipe stops, almost no decay
@@ -167,6 +290,25 @@ impl Instrument {
                 attack_noise_ms: 20.0,
                 noise_highpass: 0.6,
                 articulation_gap_ms: 0.0,  // organ is legato
+                // Phase 10
+                inharmonicity_b_low: 0.0,
+                inharmonicity_b_high: 0.0,
+                pitch_jitter_cents: 0.0,
+                amplitude_jitter: 0.0,
+                timing_jitter_ms: 0.0,
+                sympathetic_resonance_gain: 0.0,
+                release_noise: 0.02,
+                release_noise_ms: 15.0,
+                release_pitch_drop_cents: 0.0,
+                brightness_decay_ms_low: 50.0,
+                brightness_decay_ms_high: 20.0,
+                sustain_noise: 0.0,
+                sustain_noise_highpass: 0.0,
+                harmonic_modulation_rate: 0.0,
+                harmonic_modulation_depth: 0.0,
+                eq_bands: &[(200.0, 2.0, 1.0), (6000.0, -2.0, 0.8)],
+                stereo_pan: 0.0,
+                stereo_width: 1.0,
             },
             Instrument::Clarinet => InstrumentProfile {
                 // Clarinet: odd harmonics only
@@ -187,6 +329,25 @@ impl Instrument {
                 attack_noise_ms: 25.0,
                 noise_highpass: 0.4,
                 articulation_gap_ms: 15.0,
+                // Phase 10
+                inharmonicity_b_low: 0.0,
+                inharmonicity_b_high: 0.0,
+                pitch_jitter_cents: 2.0,
+                amplitude_jitter: 0.05,
+                timing_jitter_ms: 7.0,
+                sympathetic_resonance_gain: 0.0,
+                release_noise: 0.03,
+                release_noise_ms: 20.0,
+                release_pitch_drop_cents: 4.0,
+                brightness_decay_ms_low: 80.0,
+                brightness_decay_ms_high: 35.0,
+                sustain_noise: 0.025,
+                sustain_noise_highpass: 0.4,
+                harmonic_modulation_rate: 0.4,
+                harmonic_modulation_depth: 0.07,
+                eq_bands: &[(300.0, 2.0, 1.2), (2500.0, 3.0, 1.0)],
+                stereo_pan: -0.10,
+                stereo_width: 0.75,
             },
             Instrument::Trumpet => InstrumentProfile {
                 // Trumpet: bright, strong higher harmonics
@@ -207,6 +368,25 @@ impl Instrument {
                 attack_noise_ms: 20.0,
                 noise_highpass: 0.5,
                 articulation_gap_ms: 25.0,
+                // Phase 10
+                inharmonicity_b_low: 0.0,
+                inharmonicity_b_high: 0.0,
+                pitch_jitter_cents: 2.0,
+                amplitude_jitter: 0.05,
+                timing_jitter_ms: 6.0,
+                sympathetic_resonance_gain: 0.0,
+                release_noise: 0.03,
+                release_noise_ms: 15.0,
+                release_pitch_drop_cents: 3.0,
+                brightness_decay_ms_low: 130.0,
+                brightness_decay_ms_high: 60.0,
+                sustain_noise: 0.02,
+                sustain_noise_highpass: 0.5,
+                harmonic_modulation_rate: 0.35,
+                harmonic_modulation_depth: 0.06,
+                eq_bands: &[(2000.0, 4.0, 1.0), (6000.0, 2.0, 1.2)],
+                stereo_pan: 0.20,
+                stereo_width: 0.8,
             },
         }
     }
