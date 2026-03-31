@@ -36,6 +36,10 @@ Users can install and run Haydn on any major OS with a clean CLI experience. Del
 - **D-12:** **Fix inconsistent repository URLs.** Currently `haydn-vm` and `haydn-tuning` reference `jwgeller/haydn` while `haydn-audio` and `haydn-performer` reference `jaredwray/haydn`. Must be unified to the correct GitHub URL before publishing.
 - **D-13:** **Cargo.toml metadata audit.** All crates need complete metadata for crates.io: `description`, `license`, `repository`, `keywords`, `categories`. Most already have this but should be reviewed for consistency.
 
+### LLM Disclosure
+- **D-14:** **Add LLM acknowledgment to README and published content.** Explicit disclosure that LLM tools were used in development and drafting — not vague "AI-assisted" but specifically "LLM" since that's what actually happened. The creative direction, language design, and specification are human work; LLMs assisted with implementation and prose. Exact wording is agent's discretion but must use the term "LLM" not just "AI."
+- **D-15:** **Human review pass before all public-facing content.** README, wiki page, crates.io descriptions, and any published content get a personal/human review touch before going live. Phase 9 prepares everything; the author reviews before the actual publish step.
+
 ### Agent's Discretion
 - GitHub Actions workflow file structure (single workflow vs separate CI/release workflows)
 - CI matrix details (Rust stable/MSRV, exact OS versions)
@@ -114,7 +118,7 @@ Users can install and run Haydn on any major OS with a clean CLI experience. Del
 <deferred>
 ## Deferred Ideas
 
-None — discussion stayed within phase scope
+- **arXiv preprint publication** — Formal paper for cs.PL/cs.FL. Requires rigorous TC proof, proper references, and higher scrutiny than esolang wiki. Added as backlog Phase 999.3.
 
 </deferred>
 

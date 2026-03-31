@@ -219,6 +219,26 @@ Note: Phase 6 can begin after Phase 2 (parallel with Phases 3-5 if desired).
 Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
 
+### Phase 999.3: arXiv Preprint Publication (BACKLOG)
+
+**Goal:** Publish a formal preprint on arXiv (cs.PL or cs.FL) presenting Haydn as a serious-but-playful esolang paper — covering the language design, Turing completeness proof, tuning system, and live-performance execution model. Requires tightening the satirical academic framing into peer-worthy rigor while keeping the wit.
+
+**Context & Notes:**
+- arXiv has moderation and requires endorsement for first-time submitters
+- cs.PL (Programming Languages) or cs.FL (Formal Languages and Automata Theory) are appropriate categories
+- Precedent exists for playful-but-rigorous CS papers about esolangs
+- The existing Turing completeness proof in SPECIFICATION.md is genuine academic content
+- Would need proper references, formal definitions, and peer-worthy rigor on the TC proof
+- The satirical academic paper framing from the README/wiki is a natural starting point but needs tightening
+- Human review pass essential before submission — higher scrutiny than esolang wiki
+- LLM disclosure required per arXiv policy (authors responsible for accuracy)
+
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd-review-backlog when ready)
+
 ---
 *Roadmap created: 2026-03-28*
-*Last updated: 2026-03-29*
+*Last updated: 2026-03-31*
