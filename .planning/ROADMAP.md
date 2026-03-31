@@ -173,7 +173,7 @@ Plans:
 **Plans**: 3 plans
 Plans:
 - [x] 09-01-PLAN.md — Cargo.toml metadata audit, version pins, repo URL fix
-- [ ] 09-02-PLAN.md — GitHub Actions CI + tag-triggered release workflow
+- [x] 09-02-PLAN.md — GitHub Actions CI + tag-triggered release workflow
 - [ ] 09-03-PLAN.md — LLM acknowledgments, release checklist, final verification
 
 ## Progress
