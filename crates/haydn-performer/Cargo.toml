@@ -3,8 +3,10 @@ name = "haydn-performer"
 version = "0.0.1"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/jaredwray/haydn"
+repository = "https://github.com/jwgeller/haydn"
 description = "Simulated performer for the Haydn esoteric programming language"
+keywords = ["esoteric", "programming-language", "music", "lilypond"]
+categories = ["multimedia::audio"]
 
 [[bin]]
 name = "haydn-performer"

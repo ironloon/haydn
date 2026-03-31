@@ -4,7 +4,9 @@ version = "0.0.1"
 edition = "2021"
 description = "Audio capture and pitch detection for the Haydn esoteric programming language"
 license = "MIT"
-repository = "https://github.com/jaredwray/haydn"
+repository = "https://github.com/jwgeller/haydn"
+keywords = ["esoteric", "programming-language", "audio", "pitch-detection"]
+categories = ["multimedia::audio"]
 
 [dependencies]
 cpal = "0.15"
