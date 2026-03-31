@@ -21,6 +21,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 7: Audio Integration & Instrument Tunings** - Wire microphone events through the full pipeline and create voice and guitar default tunings
 - [ ] **Phase 8: Example Programs & Content** - Hello World, FizzBuzz, Cat, Truth Machine examples plus README and esolang wiki page
 - [ ] **Phase 9: Distribution & Release** - cargo install, cross-platform builds, CLI interface with device/tuning selection
+- [ ] **Phase 10: Instrument Synthesis Realism** - Higher-fidelity instrument synthesis beyond basic SoundFont playback
+- [ ] **Phase 11: Perform-and-Interpret Pipeline** - Combined mode: hear .ly playback AND watch VM computation simultaneously
 
 ## Phase Details
 
@@ -193,6 +195,8 @@ Note: Phase 6 can begin after Phase 2 (parallel with Phases 3-5 if desired).
 | 7. Audio Integration & Instrument Tunings | 3/3 | Complete | 2026-03-30 |
 | 8. Example Programs & Content | 0/0 | Not started | - |
 | 9. Distribution & Release | 0/0 | Not started | - |
+| 10. Instrument Synthesis Realism | 0/0 | Not started | - |
+| 11. Perform-and-Interpret Pipeline | 0/0 | Not started | - |
 
 ## Backlog
 
@@ -243,7 +247,17 @@ Plans:
 Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
 
-### Phase 999.4: Perform-and-Interpret Pipeline (BACKLOG)
+### Phase 10: Instrument Synthesis Realism
+
+**Goal:** Higher-fidelity instrument synthesis beyond basic SoundFont playback
+**Depends on:** Phase 9
+**Requirements**: TBD
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 10 to break down)
+
+### Phase 11: Perform-and-Interpret Pipeline
 
 **Goal:** Combined mode where haydn-performer plays a .ly score through the synth (so you hear it) while simultaneously feeding each MIDI note through the haydn tuning engine + VM (so you see it interpreted as a program). One command: hear the music AND watch the computation in real time.
 
@@ -256,11 +270,12 @@ Plans:
 - Enables the "this is what programming sounds like" demo without requiring MIDI hardware
 - Key UX question: TUI showing both performer progress AND VM state (stack, output)?
 
+**Depends on:** Phase 9
 **Requirements:** TBD
 **Plans:** 0 plans
 
 Plans:
-- [ ] TBD (promote with /gsd-review-backlog when ready)
+- [ ] TBD (run /gsd-plan-phase 11 to break down)
 
 ---
 *Roadmap created: 2026-03-28*
