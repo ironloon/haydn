@@ -37,8 +37,7 @@ Users can install and run Haydn on any major OS with a clean CLI experience. Del
 - **D-13:** **Cargo.toml metadata audit.** All crates need complete metadata for crates.io: `description`, `license`, `repository`, `keywords`, `categories`. Most already have this but should be reviewed for consistency.
 
 ### LLM Disclosure
-- **D-14:** **Add LLM acknowledgment to README and published content.** Explicit disclosure that LLM tools were used in development and drafting — not vague "AI-assisted" but specifically "LLM" since that's what actually happened. The creative direction, language design, and specification are human work; LLMs assisted with implementation and prose. Exact wording is agent's discretion but must use the term "LLM" not just "AI."
-- **D-15:** **Human review pass before all public-facing content.** README, wiki page, crates.io descriptions, and any published content get a personal/human review touch before going live. Phase 9 prepares everything; the author reviews before the actual publish step.
+- **D-14:** **Deadpan academic "Acknowledgments" section in README and wiki page.** Generic reference to "large language models" — no specific model names, no scoping of what was vs. wasn't LLM-assisted. Fits naturally into the satirical academic paper framing (papers have acknowledgments sections). Tone matches the rest: dry, formal, absurd context. Agent's discretion on exact wording.
 
 ### Agent's Discretion
 - GitHub Actions workflow file structure (single workflow vs separate CI/release workflows)
