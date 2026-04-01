@@ -56,6 +56,21 @@ pub struct ExpressiveSource {
     attack_noise_samples: u64,
     // Articulation gap
     gap_samples: u64,
+    // Fidelity 4 additions
+    use_inharmonicity: bool,
+    inharmonicity_b: f32,
+    pitch_jitter_lfo: Lfo,
+    amplitude_jitter_scale: f32,
+    release_noise_generator: super::timbre::NoiseGenerator,
+    release_noise_amplitude: f32,
+    release_noise_samples: u64,
+    release_pitch_drop_cents: f32,
+    sustain_noise_generator: super::timbre::NoiseGenerator,
+    sustain_noise_amplitude: f32,
+    harmonic_mod_lfo: Lfo,
+    harmonic_mod_depth: f32,
+    // Release start sample (total_samples - release_portion)
+    release_start_sample: u64,
 }
 
 impl ExpressiveSource {
@@ -138,7 +153,72 @@ impl ExpressiveSource {
             attack_noise_amplitude: profile.attack_noise,
             attack_noise_samples,
             gap_samples,
+            // Fidelity 4 fields disabled for fidelity 3
+            use_inharmonicity: false,
+            inharmonicity_b: 0.0,
+            pitch_jitter_lfo: Lfo::new(0.0, 0.0, sample_rate),
+            amplitude_jitter_scale: 1.0,
+            release_noise_generator: super::timbre::NoiseGenerator::new(0.0),
+            release_noise_amplitude: 0.0,
+            release_noise_samples: 0,
+            release_pitch_drop_cents: 0.0,
+            sustain_noise_generator: super::timbre::NoiseGenerator::new(0.0),
+            sustain_noise_amplitude: 0.0,
+            harmonic_mod_lfo: Lfo::new(0.0, 0.0, sample_rate),
+            harmonic_mod_depth: 0.0,
+            release_start_sample: total_samples,
         }
+    }
+
+    /// Fidelity 4 constructor: all fidelity 3 features plus inharmonicity,
+    /// stochastic jitter, sustain noise, release noise, and harmonic modulation.
+    pub fn with_instrument_fidelity4(
+        frequency: f32,
+        duration: Duration,
+        sample_rate: u32,
+        amplitude: f32,
+        velocity: u8,
+        midi_note: u8,
+        instrument: super::timbre::Instrument,
+    ) -> Self {
+        let mut source = Self::with_instrument(frequency, duration, sample_rate, amplitude, velocity, instrument);
+        let profile = instrument.profile();
+
+        // Inharmonicity
+        let b = super::timbre::inharmonicity_b_for_note(midi_note, profile.inharmonicity_b_low, profile.inharmonicity_b_high);
+        source.use_inharmonicity = b > 0.0;
+        source.inharmonicity_b = b;
+
+        // Pitch jitter LFO: 2 Hz, depth converts cents to frequency fraction
+        // 1 cent ≈ 0.000577 frequency ratio, so depth = jitter_cents * 0.000577
+        source.pitch_jitter_lfo = Lfo::new(2.0, profile.pitch_jitter_cents * 0.000577, sample_rate);
+
+        // Amplitude jitter: deterministic per-note variation
+        let hash_seed = (frequency as u32).wrapping_mul(2654435761);
+        let jitter_frac = hash_seed as f32 / u32::MAX as f32 * 2.0 - 1.0;
+        source.amplitude_jitter_scale = 1.0 + profile.amplitude_jitter * jitter_frac;
+
+        // Release noise
+        source.release_noise_generator = super::timbre::NoiseGenerator::new(profile.noise_highpass);
+        source.release_noise_amplitude = profile.release_noise;
+        source.release_noise_samples = (profile.release_noise_ms / 1000.0 * sample_rate as f32) as u64;
+        source.release_pitch_drop_cents = profile.release_pitch_drop_cents;
+
+        // Release start: last portion of note for release effects
+        let release_samples = (profile.release_ms / 1000.0 * sample_rate as f32) as u64;
+        source.release_start_sample = source.total_samples.saturating_sub(release_samples);
+
+        // Sustain noise
+        source.sustain_noise_generator = super::timbre::NoiseGenerator::new(profile.sustain_noise_highpass);
+        source.sustain_noise_amplitude = profile.sustain_noise;
+
+        // Harmonic modulation LFO
+        if profile.harmonic_modulation_rate > 0.0 {
+            source.harmonic_mod_lfo = Lfo::new(profile.harmonic_modulation_rate, 1.0, sample_rate);
+            source.harmonic_mod_depth = profile.harmonic_modulation_depth;
+        }
+
+        source
     }
 }
 
@@ -177,6 +257,21 @@ impl Iterator for ExpressiveSource {
         };
 
         let frequency = self.base_frequency * (1.0 + vibrato_mod);
+
+        // Apply pitch jitter (fidelity 4)
+        let jitter = self.pitch_jitter_lfo.sample();
+        let frequency = frequency * (1.0 + jitter);
+
+        // Apply release pitch drop (fidelity 4)
+        let frequency = if self.release_pitch_drop_cents != 0.0 && self.sample_index >= self.release_start_sample {
+            let release_progress = (self.sample_index - self.release_start_sample) as f32
+                / (self.total_samples - self.release_start_sample).max(1) as f32;
+            let drop_ratio = 2.0_f32.powf(-self.release_pitch_drop_cents * release_progress / 1200.0);
+            frequency * drop_ratio
+        } else {
+            frequency
+        };
+
         let phase = frequency * self.sample_index as f32 / self.sample_rate as f32;
 
         // Spectral evolution: brightness decays from attack_brightness to 1.0
@@ -187,14 +282,33 @@ impl Iterator for ExpressiveSource {
             1.0
         };
 
-        // Additive synthesis with evolved spectral profile
-        let base_sample = super::timbre::additive_sample_evolved(
-            phase,
-            frequency,
-            self.sample_rate,
-            self.harmonics,
-            brightness,
-        );
+        // Apply harmonic modulation (fidelity 4): slowly vary brightness
+        let brightness = if self.harmonic_mod_depth > 0.0 {
+            let mod_val = self.harmonic_mod_lfo.sample();
+            brightness * (1.0 + mod_val * self.harmonic_mod_depth)
+        } else {
+            brightness
+        };
+
+        // Additive synthesis — use inharmonic variant for fidelity 4 when B > 0
+        let base_sample = if self.use_inharmonicity {
+            super::timbre::additive_sample_inharmonic(
+                phase,
+                frequency,
+                self.sample_rate,
+                self.harmonics,
+                brightness,
+                self.inharmonicity_b,
+            )
+        } else {
+            super::timbre::additive_sample_evolved(
+                phase,
+                frequency,
+                self.sample_rate,
+                self.harmonics,
+                brightness,
+            )
+        };
 
         // Attack noise transient
         let noise = if self.sample_index < self.attack_noise_samples {
@@ -204,9 +318,29 @@ impl Iterator for ExpressiveSource {
             0.0
         };
 
-        let amp = self.amplitude * self.velocity_scale * (1.0 + tremolo_mod);
+        // Sustain noise (fidelity 4): ongoing bow friction / breath noise
+        let sustain_noise = if self.sustain_noise_amplitude > 0.0 {
+            self.sustain_noise_generator.sample() * self.sustain_noise_amplitude
+        } else {
+            0.0
+        };
+
+        // Release noise burst (fidelity 4): damper thump / bow lift
+        let release_noise = if self.release_noise_amplitude > 0.0 && self.sample_index >= self.release_start_sample {
+            let elapsed = self.sample_index - self.release_start_sample;
+            if elapsed < self.release_noise_samples {
+                let fade = 1.0 - (elapsed as f32 / self.release_noise_samples.max(1) as f32);
+                self.release_noise_generator.sample() * self.release_noise_amplitude * fade
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+
+        let amp = self.amplitude * self.velocity_scale * self.amplitude_jitter_scale * (1.0 + tremolo_mod);
         self.sample_index += 1;
-        Some((base_sample + noise) * amp)
+        Some((base_sample + noise + sustain_noise + release_noise) * amp)
     }
 }
 

@@ -13,23 +13,36 @@ use super::adsr::AdsrEnvelope;
 /// - Fidelity 1: Sine + ADSR envelope (default)
 /// - Fidelity 2: Blended waveforms + ADSR (richer timbre)
 /// - Fidelity 3: Expressive (additive synthesis with instrument profiles)
+/// - Fidelity 4: Realistic (inharmonicity, jitter, sustain noise, reverb, EQ, stereo)
+/// - Fidelity 5: SoundFont (SF2 rendering with GM program mapping)
 pub struct BuiltinSynth {
     pub fidelity: u8,
     pub instrument: Instrument,
+    pub soundfont_path: Option<std::path::PathBuf>,
 }
 
 impl BuiltinSynth {
     pub fn new(fidelity: u8) -> Self {
         Self {
-            fidelity: fidelity.min(3),
+            fidelity: fidelity.min(5),
             instrument: Instrument::default(),
+            soundfont_path: None,
         }
     }
 
     pub fn with_instrument(fidelity: u8, instrument: Instrument) -> Self {
         Self {
-            fidelity: fidelity.min(3),
+            fidelity: fidelity.min(5),
             instrument,
+            soundfont_path: None,
+        }
+    }
+
+    pub fn with_soundfont(instrument: Instrument, sf_path: std::path::PathBuf) -> Self {
+        Self {
+            fidelity: 5,
+            instrument,
+            soundfont_path: Some(sf_path),
         }
     }
 }
@@ -91,7 +104,39 @@ impl SynthBackend for BuiltinSynth {
                                 buffer.push(sample * env.amplitude());
                             }
                         }
-                        _ => unreachable!(),
+                        4 => {
+                            // Realistic: inharmonicity + jitter + sustain noise + instrument ADSR
+                            let mut expressive = ExpressiveSource::with_instrument_fidelity4(
+                                freq,
+                                note.duration,
+                                sr,
+                                1.0,
+                                note.velocity,
+                                note.midi_note,
+                                self.instrument,
+                            );
+                            let profile = self.instrument.profile();
+                            let mut env = AdsrEnvelope::from_profile(&profile, note.duration, sr);
+                            while let Some(sample) = expressive.next() {
+                                buffer.push(sample * env.amplitude());
+                            }
+                        }
+                        _ => {
+                            // Fallback: fidelity 3 behavior for any unrecognized level
+                            let mut expressive = ExpressiveSource::with_instrument(
+                                freq,
+                                note.duration,
+                                sr,
+                                1.0,
+                                note.velocity,
+                                self.instrument,
+                            );
+                            let profile = self.instrument.profile();
+                            let mut env = AdsrEnvelope::from_profile(&profile, note.duration, sr);
+                            while let Some(sample) = expressive.next() {
+                                buffer.push(sample * env.amplitude());
+                            }
+                        }
                     }
                 }
                 ScoreEvent::Rest(rest) => {
@@ -99,6 +144,33 @@ impl SynthBackend for BuiltinSynth {
                     buffer.extend(silence);
                 }
             }
+        }
+
+        // Fidelity 5: delegate to SoundFont synth
+        if fidelity == 5 {
+            if let Some(ref sf_path) = self.soundfont_path {
+                let sf_synth = super::soundfont::SoundFontSynth::with_instrument(
+                    sf_path.clone(),
+                    self.instrument,
+                );
+                return sf_synth.synthesize(sequence, sample_rate);
+            }
+            // Fallback to fidelity 3 post-processing if no soundfont
+        }
+
+        // Fidelity 4: apply realistic post-processing chain
+        if fidelity == 4 {
+            let profile = self.instrument.profile();
+            // Soft saturation to warm peaks
+            effects::soft_saturate(&mut buffer, 1.3);
+            // Dattorro plate reverb for natural room acoustics
+            let mut reverb = effects::DattorroReverb::hall(sr);
+            reverb.process(&mut buffer);
+            // Per-instrument EQ
+            effects::apply_eq(&mut buffer, profile.eq_bands, sr);
+            // Stereo with instrument-specific panning and width
+            let stereo = effects::stereo_pan_mix(&buffer, sr, profile.stereo_pan, profile.stereo_width);
+            return Box::new(rodio::buffer::SamplesBuffer::new(2, sample_rate, stereo));
         }
 
         // Fidelity 3: apply post-processing chain (reverb → saturation → stereo)
@@ -124,6 +196,8 @@ impl SynthBackend for BuiltinSynth {
             1 => "built-in (sine + ADSR)",
             2 => "built-in (waveform + ADSR)",
             3 => "built-in (expressive)",
+            4 => "built-in (realistic)",
+            5 => "soundfont (SF2)",
             _ => "built-in",
         }
     }

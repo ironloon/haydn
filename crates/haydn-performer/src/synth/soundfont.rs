@@ -8,11 +8,26 @@ use std::sync::Arc;
 /// Loads a .sf2 file and renders note sequences with realistic instrument timbres.
 pub struct SoundFontSynth {
     sf2_path: PathBuf,
+    program: Option<u8>,
 }
 
 impl SoundFontSynth {
     pub fn new(sf2_path: PathBuf) -> Self {
-        Self { sf2_path }
+        Self { sf2_path, program: None }
+    }
+
+    /// Create a SoundFontSynth with GM program number mapped from instrument.
+    pub fn with_instrument(sf2_path: PathBuf, instrument: super::timbre::Instrument) -> Self {
+        let program = match instrument {
+            super::timbre::Instrument::Piano => 0,       // Acoustic Grand Piano
+            super::timbre::Instrument::Strings => 48,    // String Ensemble 1
+            super::timbre::Instrument::Cello => 42,      // Cello
+            super::timbre::Instrument::Flute => 73,      // Flute
+            super::timbre::Instrument::Organ => 19,      // Church Organ
+            super::timbre::Instrument::Clarinet => 71,   // Clarinet
+            super::timbre::Instrument::Trumpet => 56,    // Trumpet
+        };
+        Self { sf2_path, program: Some(program) }
     }
 }
 
@@ -54,6 +69,11 @@ impl SynthBackend for SoundFontSynth {
                 return Box::new(rodio::buffer::SamplesBuffer::new(2, sample_rate, silence));
             }
         };
+
+        // Send GM program change if instrument mapping is set
+        if let Some(pg) = self.program {
+            synth.process_midi_message(0, 0xC0, pg as i32, 0);
+        }
 
         // Pre-render entire sequence into stereo buffer
         let mut left: Vec<f32> = Vec::new();
