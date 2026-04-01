@@ -207,13 +207,15 @@ pub fn run_display(
 /// Run the dual-panel TUI for interpret mode: performer view + VM dashboard.
 ///
 /// Blocks until playback ends (stop_signal is set) or user presses 'q'.
-/// Each note is fed through the InterpretState to update the VM dashboard.
+/// Mic-detected notes from the audio capture pipeline are fed through InterpretState
+/// to update the VM dashboard in real time.
 pub fn run_interpret_display(
     sequence: &NoteSequence,
     backend_name: &str,
     bpm: u32,
     stop_signal: Arc<AtomicBool>,
     interpret: Arc<Mutex<InterpretState>>,
+    mic_rx: std::sync::mpsc::Receiver<haydn_audio::AudioMsg>,
 ) -> anyhow::Result<()> {
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
@@ -230,11 +232,9 @@ pub fn run_interpret_display(
     };
     let mut vm_state = vm_display::TuiState::new(
         tuning_name,
-        "score".to_string(),
+        "mic".to_string(),
         "Interpret".to_string(),
     );
-
-    let mut last_processed_index: Option<usize> = None;
 
     loop {
         if stop_signal.load(Ordering::Relaxed) {
@@ -255,24 +255,29 @@ pub fn run_interpret_display(
             break;
         }
 
+        // Drain mic-detected notes and feed through VM
+        while let Ok(msg) = mic_rx.try_recv() {
+            match msg {
+                haydn_audio::AudioMsg::NoteOn { note, .. } => {
+                    let mut interp = interpret.lock().unwrap();
+                    let results = interp.process_note(note);
+                    for result in &results {
+                        vm_state.update_from_step(note, 80, result);
+                    }
+                }
+                haydn_audio::AudioMsg::SignalLevel(level) => {
+                    vm_state.signal_level = Some(level);
+                }
+                haydn_audio::AudioMsg::NoteOff => {}
+            }
+        }
+
         let idx = current_index(sequence, elapsed);
         let progress = if total_dur.as_secs_f64() > 0.0 {
             (elapsed.as_secs_f64() / total_dur.as_secs_f64()).min(1.0)
         } else {
             1.0
         };
-
-        // Feed new notes to the VM
-        if last_processed_index != Some(idx) {
-            if let ScoreEvent::Note(ref n) = sequence[idx] {
-                let mut interp = interpret.lock().unwrap();
-                let results = interp.process_note(n.midi_note);
-                for result in &results {
-                    vm_state.update_from_step(n.midi_note, n.velocity, result);
-                }
-            }
-            last_processed_index = Some(idx);
-        }
 
         let note_line = note_display(sequence, idx, 7);
         let (cur_measure, total_measures) = measure_info(sequence, idx, bpm);

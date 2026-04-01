@@ -83,4 +83,12 @@ pub struct Cli {
     /// Path to tuning file (required with --interpret)
     #[arg(long)]
     pub tuning: Option<PathBuf>,
+
+    /// Pitch detection confidence threshold (0.0-1.0, lower = more sensitive)
+    #[arg(long, default_value_t = 0.3)]
+    pub confidence: f32,
+
+    /// Noise gate in dB (more negative = more sensitive, e.g. -60)
+    #[arg(long, default_value_t = -55.0)]
+    pub noise_gate: f32,
 }

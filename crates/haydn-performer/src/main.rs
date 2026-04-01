@@ -95,6 +95,15 @@ fn main() -> Result<()> {
         );
     }
 
+    // Build audio config for interpret mode mic capture (lenient defaults for speaker→mic path)
+    let interpret_audio_config = haydn_audio::AudioConfig {
+        confidence_threshold: args.confidence,
+        noise_gate_db: args.noise_gate,
+        onset_threshold_db: 3.0,
+        min_note_ms: 50,
+        ..haydn_audio::AudioConfig::default()
+    };
+
     match args.synth {
         cli::SynthType::Builtin => {
             let backend = if args.fidelity == 5 {
@@ -116,8 +125,10 @@ fn main() -> Result<()> {
                     args.bpm,
                     args.quiet,
                     args.output_device.as_deref(),
+                    args.input_device.as_deref(),
                     args.volume,
                     args.tuning.as_ref().unwrap(),
+                    interpret_audio_config.clone(),
                 )?;
             } else {
                 play_with_display(
@@ -144,8 +155,10 @@ fn main() -> Result<()> {
                     args.bpm,
                     args.quiet,
                     args.output_device.as_deref(),
+                    args.input_device.as_deref(),
                     args.volume,
                     args.tuning.as_ref().unwrap(),
+                    interpret_audio_config,
                 )?;
             } else {
                 play_with_display(
@@ -237,10 +250,12 @@ fn play_with_interpret(
     bpm: u32,
     quiet: bool,
     output_device_name: Option<&str>,
+    input_device_name: Option<&str>,
     volume: f32,
     tuning_path: &std::path::Path,
+    audio_config: haydn_audio::AudioConfig,
 ) -> Result<()> {
-    use haydn_performer::types::ScoreEvent;
+    use haydn_audio::types::AudioMsg;
 
     let interpret = haydn_performer::interpret::InterpretState::new(tuning_path)?;
 
@@ -251,15 +266,30 @@ fn play_with_interpret(
     let source = backend.synthesize(sequence, 44100);
     sink.append(source);
 
+    // Start mic capture for pitch detection
+    let mic_device = haydn_audio::find_audio_input_device(input_device_name)
+        .map_err(|e| anyhow::anyhow!("Mic capture: {e}"))?;
+    let audio_config = audio_config;
+    let (mic_rx, _mic_stream) = haydn_audio::start_audio_capture(mic_device, audio_config)
+        .map_err(|e| anyhow::anyhow!("Mic capture: {e}"))?;
+
     if quiet {
-        // Process all notes through VM and print to stderr
+        // Poll mic for detected notes, feed through VM, log to stderr
         let mut interpret = interpret;
-        for event in sequence {
-            if let ScoreEvent::Note(ref n) = event {
-                let results = interpret.process_note(n.midi_note);
-                for result in &results {
-                    eprintln!("{}", haydn::format_event_log(n.midi_note, n.velocity, result));
+        loop {
+            if sink.empty() {
+                break;
+            }
+            match mic_rx.recv_timeout(std::time::Duration::from_millis(10)) {
+                Ok(AudioMsg::NoteOn { note, .. }) => {
+                    let results = interpret.process_note(note);
+                    for result in &results {
+                        eprintln!("{}", haydn::format_event_log(note, 80, result));
+                    }
                 }
+                Ok(_) => {} // SignalLevel, NoteOff — ignore in quiet mode
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
         sink.sleep_until_end();
@@ -282,6 +312,7 @@ fn play_with_interpret(
             bpm,
             display_stop,
             interpret_clone,
+            mic_rx,
         );
     });
 
