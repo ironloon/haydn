@@ -387,6 +387,129 @@ impl DattorroReverb {
     }
 }
 
+/// Second-order IIR biquad filter configured as a peaking EQ.
+/// Each band boosts or cuts a frequency region.
+pub struct BiquadEq {
+    // Coefficients
+    b0: f32,
+    b1: f32,
+    b2: f32,
+    a1: f32,
+    a2: f32,
+    // State
+    x1: f32,
+    x2: f32,
+    y1: f32,
+    y2: f32,
+}
+
+impl BiquadEq {
+    /// Create a peaking EQ filter.
+    /// - `freq_hz`: center frequency
+    /// - `gain_db`: boost/cut in dB (positive = boost, negative = cut). Clamped to ±6dB.
+    /// - `q`: bandwidth (higher Q = narrower band). Typical: 0.5–2.0.
+    /// - `sample_rate`: audio sample rate
+    pub fn peaking(freq_hz: f32, gain_db: f32, q: f32, sample_rate: u32) -> Self {
+        let gain_db = gain_db.clamp(-6.0, 6.0);
+        let a = 10f32.powf(gain_db / 40.0);
+        let w0 = 2.0 * std::f32::consts::PI * freq_hz / sample_rate as f32;
+        let alpha = w0.sin() / (2.0 * q);
+
+        let b0 = 1.0 + alpha * a;
+        let b1 = -2.0 * w0.cos();
+        let b2 = 1.0 - alpha * a;
+        let a0 = 1.0 + alpha / a;
+        let a1 = -2.0 * w0.cos();
+        let a2 = 1.0 - alpha / a;
+
+        Self {
+            b0: b0 / a0,
+            b1: b1 / a0,
+            b2: b2 / a0,
+            a1: a1 / a0,
+            a2: a2 / a0,
+            x1: 0.0,
+            x2: 0.0,
+            y1: 0.0,
+            y2: 0.0,
+        }
+    }
+
+    /// Process one sample through the biquad.
+    pub fn process_sample(&mut self, x: f32) -> f32 {
+        let y = self.b0 * x + self.b1 * self.x1 + self.b2 * self.x2
+            - self.a1 * self.y1 - self.a2 * self.y2;
+        self.x2 = self.x1;
+        self.x1 = x;
+        self.y2 = self.y1;
+        self.y1 = y;
+        y
+    }
+
+    /// Process a buffer in-place.
+    pub fn process(&mut self, buffer: &mut [f32]) {
+        for sample in buffer.iter_mut() {
+            *sample = self.process_sample(*sample);
+        }
+    }
+}
+
+/// Apply a chain of parametric EQ bands to a buffer.
+/// `bands` is a slice of `(freq_hz, gain_db, q)` tuples.
+pub fn apply_eq(buffer: &mut [f32], bands: &[(f32, f32, f32)], sample_rate: u32) {
+    for &(freq, gain, q) in bands {
+        if gain.abs() < 0.01 {
+            continue;
+        } // skip flat bands
+        let mut eq = BiquadEq::peaking(freq, gain, q, sample_rate);
+        eq.process(buffer);
+    }
+}
+
+/// Convert mono buffer to stereo with instrument-specific panning and width.
+///
+/// - `pan`: -1.0 = full left, 0.0 = center, +1.0 = full right
+/// - `width`: 0.0 = mono (no Haas effect), 1.0 = full width (current default)
+///
+/// Uses constant-power panning: left = cos(θ), right = sin(θ)
+/// where θ = (pan + 1) * π/4 (maps -1..+1 to 0..π/2).
+pub fn stereo_pan_mix(mono: &[f32], sample_rate: u32, pan: f32, width: f32) -> Vec<f32> {
+    let pan = pan.clamp(-1.0, 1.0);
+    let width = width.clamp(0.0, 1.0);
+
+    // Constant-power pan law
+    let theta = (pan + 1.0) * std::f32::consts::FRAC_PI_4;
+    let pan_left = theta.cos();
+    let pan_right = theta.sin();
+
+    // Haas delay for stereo width (same as existing mono_to_stereo but scaled by width)
+    let delay_samples = ((0.0006 * width as f64) * sample_rate as f64) as usize;
+    let len = mono.len();
+    let mut stereo = vec![0.0f32; len * 2];
+
+    let cross = 0.15 * width; // cross-feed scales with width
+
+    for i in 0..len {
+        let left_raw = mono[i];
+        let right_raw = if delay_samples > 0 && i >= delay_samples {
+            mono[i - delay_samples]
+        } else if delay_samples == 0 {
+            mono[i]
+        } else {
+            0.0
+        };
+
+        // Apply cross-feed then panning
+        let left = (left_raw * (1.0 - cross) + right_raw * cross) * pan_left;
+        let right = (right_raw * (1.0 - cross) + left_raw * cross) * pan_right;
+
+        stereo[i * 2] = left;
+        stereo[i * 2 + 1] = right;
+    }
+
+    stereo
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -473,5 +596,56 @@ mod tests {
         reverb.process(&mut buffer);
         let max = buffer.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
         assert!(max < 10.0, "reverb should not explode, max={}", max);
+    }
+
+    #[test]
+    fn test_biquad_eq_boost() {
+        // Boosting should increase energy
+        let sample_rate = 44100;
+        let freq = 1000.0;
+        let mut boosted = Vec::new();
+        let mut flat = Vec::new();
+        for i in 0..4410 {
+            let t = i as f32 / sample_rate as f32;
+            let s = (2.0 * std::f32::consts::PI * freq * t).sin();
+            boosted.push(s);
+            flat.push(s);
+        }
+        let mut eq = BiquadEq::peaking(1000.0, 6.0, 1.0, sample_rate);
+        eq.process(&mut boosted);
+        let flat_energy: f32 = flat.iter().map(|s| s * s).sum();
+        let boost_energy: f32 = boosted.iter().map(|s| s * s).sum();
+        assert!(
+            boost_energy > flat_energy * 1.2,
+            "EQ boost should increase energy"
+        );
+    }
+
+    #[test]
+    fn test_stereo_pan_left() {
+        let mono = vec![1.0f32; 100];
+        let stereo = stereo_pan_mix(&mono, 44100, -1.0, 0.0);
+        // Full left pan: left channel should have signal, right should be near-zero
+        let left_energy: f32 = stereo.iter().step_by(2).map(|s| s * s).sum();
+        let right_energy: f32 = stereo.iter().skip(1).step_by(2).map(|s| s * s).sum();
+        assert!(
+            left_energy > right_energy * 10.0,
+            "left pan should favor left channel"
+        );
+    }
+
+    #[test]
+    fn test_stereo_pan_center() {
+        let mono = vec![1.0f32; 100];
+        let stereo = stereo_pan_mix(&mono, 44100, 0.0, 0.0);
+        // Center pan with no width: both channels should be equal
+        let left_energy: f32 = stereo.iter().step_by(2).map(|s| s * s).sum();
+        let right_energy: f32 = stereo.iter().skip(1).step_by(2).map(|s| s * s).sum();
+        let ratio = (left_energy / right_energy).abs();
+        assert!(
+            (ratio - 1.0).abs() < 0.1,
+            "center pan should be equal, ratio={}",
+            ratio
+        );
     }
 }
