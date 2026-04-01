@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 use cpal::traits::{DeviceTrait, HostTrait};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 mod cli;
 
@@ -28,6 +28,12 @@ fn main() -> Result<()> {
     if args.fidelity == 5 && args.soundfont.is_none() {
         bail!("--fidelity 5 requires --soundfont <path>. Download a GM SoundFont \
                (e.g., FluidR3_GM.sf2 or TimGM6mb.sf2) and provide the path.");
+    }
+
+    // Validate --interpret requires --tuning
+    if args.interpret && args.tuning.is_none() {
+        bail!("--interpret requires --tuning <path>. Specify which tuning file maps notes to VM opcodes.\n\
+               Example: haydn-performer score.ly --interpret --tuning piano.toml");
     }
 
     // --test-audio: diagnostic mode that plays test tones through speakers
@@ -102,32 +108,61 @@ fn main() -> Result<()> {
                     args.instrument,
                 )
             };
-            play_with_display(
-                &backend,
-                &sequence,
-                synth_name,
-                args.bpm,
-                args.quiet,
-                args.output_device.as_deref(),
-                args.volume,
-            )?;
+            if args.interpret {
+                play_with_interpret(
+                    &backend,
+                    &sequence,
+                    synth_name,
+                    args.bpm,
+                    args.quiet,
+                    args.output_device.as_deref(),
+                    args.volume,
+                    args.tuning.as_ref().unwrap(),
+                )?;
+            } else {
+                play_with_display(
+                    &backend,
+                    &sequence,
+                    synth_name,
+                    args.bpm,
+                    args.quiet,
+                    args.output_device.as_deref(),
+                    args.volume,
+                )?;
+            }
         }
         cli::SynthType::Soundfont => {
             let sf_path = args
                 .soundfont
                 .ok_or_else(|| anyhow::anyhow!("--soundfont path required for soundfont backend"))?;
             let backend = haydn_performer::synth::soundfont::SoundFontSynth::new(sf_path);
-            play_with_display(
-                &backend,
-                &sequence,
-                synth_name,
-                args.bpm,
-                args.quiet,
-                args.output_device.as_deref(),
-                args.volume,
-            )?;
+            if args.interpret {
+                play_with_interpret(
+                    &backend,
+                    &sequence,
+                    synth_name,
+                    args.bpm,
+                    args.quiet,
+                    args.output_device.as_deref(),
+                    args.volume,
+                    args.tuning.as_ref().unwrap(),
+                )?;
+            } else {
+                play_with_display(
+                    &backend,
+                    &sequence,
+                    synth_name,
+                    args.bpm,
+                    args.quiet,
+                    args.output_device.as_deref(),
+                    args.volume,
+                )?;
+            }
         }
         cli::SynthType::Midi => {
+            if args.interpret {
+                bail!("--interpret is not supported with --synth midi (no audio synthesis for dual playback)");
+            }
             if let Some(ref midi_out) = args.midi_out {
                 // Write MIDI file (no TUI, no audio)
                 haydn_performer::midi::write_midi_file(&sequence, midi_out, args.bpm)
@@ -191,6 +226,73 @@ fn play_with_display(
 
     // Wait for display thread to clean up
     let _ = display_handle.join();
+
+    Ok(())
+}
+
+fn play_with_interpret(
+    backend: &dyn haydn_performer::synth::SynthBackend,
+    sequence: &haydn_performer::types::NoteSequence,
+    backend_name: &str,
+    bpm: u32,
+    quiet: bool,
+    output_device_name: Option<&str>,
+    volume: f32,
+    tuning_path: &std::path::Path,
+) -> Result<()> {
+    use haydn_performer::types::ScoreEvent;
+
+    let interpret = haydn_performer::interpret::InterpretState::new(tuning_path)?;
+
+    let (_stream, stream_handle) = open_output(output_device_name)?;
+    let sink = rodio::Sink::try_new(&stream_handle).context("Failed to create audio sink")?;
+    sink.set_volume(volume);
+
+    let source = backend.synthesize(sequence, 44100);
+    sink.append(source);
+
+    if quiet {
+        // Process all notes through VM and print to stderr
+        let mut interpret = interpret;
+        for event in sequence {
+            if let ScoreEvent::Note(ref n) = event {
+                let results = interpret.process_note(n.midi_note);
+                for result in &results {
+                    eprintln!("{}", haydn::format_event_log(n.midi_note, n.velocity, result));
+                }
+            }
+        }
+        sink.sleep_until_end();
+        eprintln!("{}", haydn::format_session_summary(&interpret.vm));
+        return Ok(());
+    }
+
+    // TUI mode: wrap interpret in Arc<Mutex<>> for display thread
+    let interpret = Arc::new(Mutex::new(interpret));
+    let stop_signal = Arc::new(AtomicBool::new(false));
+    let display_stop = stop_signal.clone();
+    let display_sequence = sequence.clone();
+    let display_backend = backend_name.to_string();
+    let interpret_clone = interpret.clone();
+
+    let display_handle = std::thread::spawn(move || {
+        let _ = haydn_performer::display::run_interpret_display(
+            &display_sequence,
+            &display_backend,
+            bpm,
+            display_stop,
+            interpret_clone,
+        );
+    });
+
+    sink.sleep_until_end();
+    stop_signal.store(true, Ordering::Relaxed);
+    let _ = display_handle.join();
+
+    // Print session summary after TUI closes
+    if let Ok(interp) = interpret.lock() {
+        eprintln!("{}", haydn::format_session_summary(&interp.vm));
+    }
 
     Ok(())
 }
