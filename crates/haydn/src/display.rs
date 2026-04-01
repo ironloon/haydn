@@ -162,7 +162,7 @@ pub fn render_dashboard(frame: &mut Frame, state: &TuiState) {
     render_status(frame, state, status_area);
 }
 
-fn render_stack(frame: &mut Frame, state: &TuiState, area: Rect) {
+pub fn render_stack(frame: &mut Frame, state: &TuiState, area: Rect) {
     let block = Block::default()
         .title(" Stack ")
         .borders(Borders::ALL)
@@ -211,7 +211,7 @@ fn render_stack(frame: &mut Frame, state: &TuiState, area: Rect) {
     frame.render_widget(paragraph, inner);
 }
 
-fn render_operations(frame: &mut Frame, state: &TuiState, area: Rect) {
+pub fn render_operations(frame: &mut Frame, state: &TuiState, area: Rect) {
     let block = Block::default()
         .title(" Operations ")
         .borders(Borders::ALL)
@@ -258,7 +258,7 @@ fn render_operations(frame: &mut Frame, state: &TuiState, area: Rect) {
     frame.render_widget(paragraph, inner);
 }
 
-fn render_output(frame: &mut Frame, state: &TuiState, area: Rect) {
+pub fn render_output(frame: &mut Frame, state: &TuiState, area: Rect) {
     let block = Block::default()
         .title(" Output ")
         .borders(Borders::ALL)
@@ -272,7 +272,7 @@ fn render_output(frame: &mut Frame, state: &TuiState, area: Rect) {
     frame.render_widget(paragraph, inner);
 }
 
-fn render_status(frame: &mut Frame, state: &TuiState, area: Rect) {
+pub fn render_status(frame: &mut Frame, state: &TuiState, area: Rect) {
     let device = if state.connected {
         Span::raw(format!("{}: {}", state.input_mode, state.device_name))
     } else {
