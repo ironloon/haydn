@@ -75,4 +75,12 @@ pub struct Cli {
     /// Instrument timbre preset (piano, strings, flute, organ, clarinet, trumpet)
     #[arg(long, default_value = "piano", value_enum)]
     pub instrument: Instrument,
+
+    /// Enable interpret mode: feed notes through tuning engine + VM alongside playback
+    #[arg(long)]
+    pub interpret: bool,
+
+    /// Path to tuning file (required with --interpret)
+    #[arg(long)]
+    pub tuning: Option<PathBuf>,
 }

@@ -24,3 +24,6 @@ midir = "0.10"
 ratatui = "0.29"
 crossterm = "0.28"
 cpal = "0.15"
+haydn = { path = "../haydn" }
+haydn-tuning = { path = "../haydn-tuning" }
+haydn-vm = { path = "../haydn-vm" }
