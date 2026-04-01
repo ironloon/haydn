@@ -1,12 +1,14 @@
+use crate::interpret::InterpretState;
 use crate::types::{NoteSequence, ScoreEvent};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::ExecutableCommand;
+use haydn::display as vm_display;
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Gauge, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Gauge, Paragraph};
 use std::io::stdout;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const NOTE_NAMES: [&str; 12] = [
@@ -196,6 +198,178 @@ pub fn run_display(
     }
 
     // Restore terminal
+    disable_raw_mode()?;
+    stdout().execute(LeaveAlternateScreen)?;
+
+    Ok(())
+}
+
+/// Run the dual-panel TUI for interpret mode: performer view + VM dashboard.
+///
+/// Blocks until playback ends (stop_signal is set) or user presses 'q'.
+/// Each note is fed through the InterpretState to update the VM dashboard.
+pub fn run_interpret_display(
+    sequence: &NoteSequence,
+    backend_name: &str,
+    bpm: u32,
+    stop_signal: Arc<AtomicBool>,
+    interpret: Arc<Mutex<InterpretState>>,
+) -> anyhow::Result<()> {
+    enable_raw_mode()?;
+    stdout().execute(EnterAlternateScreen)?;
+
+    let backend = CrosstermBackend::new(stdout());
+    let mut terminal = Terminal::new(backend)?;
+
+    let total_dur = total_duration(sequence);
+    let start = Instant::now();
+
+    let tuning_name = {
+        let interp = interpret.lock().unwrap();
+        interp.tuning_name.clone()
+    };
+    let mut vm_state = vm_display::TuiState::new(
+        tuning_name,
+        "score".to_string(),
+        "Interpret".to_string(),
+    );
+
+    let mut last_processed_index: Option<usize> = None;
+
+    loop {
+        if stop_signal.load(Ordering::Relaxed) {
+            break;
+        }
+
+        if event::poll(Duration::from_millis(33))? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press && key.code == KeyCode::Char('q') {
+                    stop_signal.store(true, Ordering::Relaxed);
+                    break;
+                }
+            }
+        }
+
+        let elapsed = start.elapsed();
+        if elapsed >= total_dur {
+            break;
+        }
+
+        let idx = current_index(sequence, elapsed);
+        let progress = if total_dur.as_secs_f64() > 0.0 {
+            (elapsed.as_secs_f64() / total_dur.as_secs_f64()).min(1.0)
+        } else {
+            1.0
+        };
+
+        // Feed new notes to the VM
+        if last_processed_index != Some(idx) {
+            if let ScoreEvent::Note(ref n) = sequence[idx] {
+                let mut interp = interpret.lock().unwrap();
+                let results = interp.process_note(n.midi_note);
+                for result in &results {
+                    vm_state.update_from_step(n.midi_note, n.velocity, result);
+                }
+            }
+            last_processed_index = Some(idx);
+        }
+
+        let note_line = note_display(sequence, idx, 7);
+        let (cur_measure, total_measures) = measure_info(sequence, idx, bpm);
+        let percent = (progress * 100.0) as u16;
+
+        terminal.draw(|frame| {
+            let area = frame.area();
+            let is_wide = area.width >= 100;
+
+            // Split into performer panel and VM panel
+            let panels = if is_wide {
+                Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+                    .split(area)
+            } else {
+                Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+                    .split(area)
+            };
+
+            let performer_area = panels[0];
+            let vm_area = panels[1];
+
+            // --- Performer panel ---
+            let performer_block = Block::default()
+                .title(" Performer ")
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded);
+            let performer_inner = performer_block.inner(performer_area);
+            frame.render_widget(performer_block, performer_area);
+
+            let performer_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(2), // Note display
+                    Constraint::Length(1), // Progress bar
+                    Constraint::Length(1), // Measure / note info
+                    Constraint::Length(1), // Backend info
+                    Constraint::Min(0),    // Spacer
+                ])
+                .split(performer_inner);
+
+            let note_para = Paragraph::new(format!("  ♪  {}", note_line))
+                .alignment(Alignment::Center);
+            frame.render_widget(note_para, performer_chunks[0]);
+
+            let gauge = Gauge::default()
+                .gauge_style(Style::default().fg(Color::Cyan))
+                .percent(percent)
+                .label(format!("{}%", percent));
+            frame.render_widget(gauge, performer_chunks[1]);
+
+            let info = Paragraph::new(format!(
+                "  Measure {} / {}    Note {} / {}",
+                cur_measure, total_measures, idx + 1, sequence.len()
+            ));
+            frame.render_widget(info, performer_chunks[2]);
+
+            let backend_info = Paragraph::new(format!(
+                "  Backend: {}    BPM: {}", backend_name, bpm
+            ));
+            frame.render_widget(backend_info, performer_chunks[3]);
+
+            // --- VM panel ---
+            let vm_block = Block::default()
+                .title(" VM ")
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded);
+            let vm_inner = vm_block.inner(vm_area);
+            frame.render_widget(vm_block, vm_area);
+
+            // VM inner layout: stack (25%) | right panels (75%)
+            let vm_horiz = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
+                .split(vm_inner);
+
+            let stack_area = vm_horiz[0];
+            let right_area = vm_horiz[1];
+
+            // Right side: operations (70%) | output (30%)
+            let vm_right = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+                .split(right_area);
+
+            let ops_area = vm_right[0];
+            let output_area = vm_right[1];
+
+            vm_display::render_stack(frame, &vm_state, stack_area);
+            vm_display::render_operations(frame, &vm_state, ops_area);
+            vm_display::render_output(frame, &vm_state, output_area);
+        })?;
+    }
+
     disable_raw_mode()?;
     stdout().execute(LeaveAlternateScreen)?;
 
