@@ -21,7 +21,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 7: Audio Integration & Instrument Tunings** - Wire microphone events through the full pipeline and create voice and guitar default tunings
 - [ ] **Phase 8: Example Programs & Content** - Hello World, FizzBuzz, Cat, Truth Machine examples plus README and esolang wiki page
 - [ ] **Phase 9: Distribution & Release** - cargo install, cross-platform builds, CLI interface with device/tuning selection
-- [ ] **Phase 10: Instrument Synthesis Realism** - Higher-fidelity instrument synthesis beyond basic SoundFont playback
+- [x] **Phase 10: Instrument Synthesis Realism** - Higher-fidelity instrument synthesis beyond basic SoundFont playback
+ (completed 2026-04-01)
 - [ ] **Phase 11: Perform-and-Interpret Pipeline** - Combined mode: hear .ly playback AND watch VM computation simultaneously
 
 ## Phase Details
@@ -195,8 +196,8 @@ Note: Phase 6 can begin after Phase 2 (parallel with Phases 3-5 if desired).
 | 7. Audio Integration & Instrument Tunings | 3/3 | Complete | 2026-03-30 |
 | 8. Example Programs & Content | 0/0 | Not started | - |
 | 9. Distribution & Release | 0/0 | Not started | - |
-| 10. Instrument Synthesis Realism | 0/0 | Not started | - |
-| 11. Perform-and-Interpret Pipeline | 0/0 | Not started | - |
+| 10. Instrument Synthesis Realism | 3/3 | Complete    | 2026-04-01 |
+| 11. Perform-and-Interpret Pipeline | 1/2 | In Progress|  |
 
 ## Backlog
 
@@ -251,11 +252,13 @@ Plans:
 
 **Goal:** Higher-fidelity instrument synthesis beyond basic SoundFont playback
 **Depends on:** Phase 9
-**Requirements**: TBD
-**Plans:** 0 plans
+**Requirements**: D-01, D-02, D-03, D-04, D-05, D-06, D-07, D-08, D-09, D-10
+**Plans:** 3/3 plans complete
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 10 to break down)
+- [x] 10-01-PLAN.md — Extend InstrumentProfile with realism fields + inharmonic additive synthesis
+- [x] 10-02-PLAN.md — Dattorro plate reverb + biquad parametric EQ + stereo panning
+- [x] 10-03-PLAN.md — Fidelity 4/5 integration in ExpressiveSource, BuiltinSynth, SoundFont, CLI
 
 ### Phase 11: Perform-and-Interpret Pipeline
 
@@ -266,16 +269,22 @@ Plans:
 - Performer already parses .ly → NoteSequence with MIDI note numbers and durations
 - Interpreter already maps MIDI notes → tuning → VM via `process_note()`
 - Pipeline would: parse score → for each note, synthesize audio AND feed through VM → display program output alongside playback
-- Could be a `--interpret` flag on haydn-performer, or a new `haydn play` subcommand
+- `--interpret` flag on haydn-performer, with `--tuning <path>` required
 - Enables the "this is what programming sounds like" demo without requiring MIDI hardware
-- Key UX question: TUI showing both performer progress AND VM state (stack, output)?
+- Dual-panel TUI: performer view (left) + VM dashboard (right), stacked fallback < 100 cols
 
 **Depends on:** Phase 9
-**Requirements:** TBD
-**Plans:** 0 plans
-
+**Requirements**: INTERP-01, INTERP-02, INTERP-03, INTERP-04, INTERP-05, INTERP-06, INTERP-07
+**Success Criteria** (what must be TRUE):
+  1. User can run `haydn-performer score.ly --interpret --tuning piano.toml` and hear audio while watching VM computation
+  2. TUI shows side-by-side: performer progress (left) and VM dashboard with stack, operations, program output (right)
+  3. Each note triggers both audio playback and VM execution in lockstep
+  4. Loop replay operations display as rapid bursts in the VM panel during the next note/rest
+  5. Layout gracefully falls back to stacked (top/bottom) on narrow terminals (< ~100 columns)
+**Plans**: 2 plans
 Plans:
-- [ ] TBD (run /gsd-plan-phase 11 to break down)
+- [x] 11-01-PLAN.md — Dependencies + CLI flags + interpret module + VM render visibility
+- [ ] 11-02-PLAN.md — Dual-panel TUI + main loop integration + verification
 
 ---
 *Roadmap created: 2026-03-28*
