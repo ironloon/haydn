@@ -180,6 +180,213 @@ pub fn soft_saturate(buffer: &mut [f32], drive: f32) {
     }
 }
 
+/// One-pole lowpass filter — used for damping and bandwidth control in DattorroReverb.
+struct OnePole {
+    coeff: f32,
+    prev: f32,
+}
+
+impl OnePole {
+    fn new(coeff: f32) -> Self {
+        Self { coeff, prev: 0.0 }
+    }
+
+    fn process(&mut self, input: f32) -> f32 {
+        self.prev = input * (1.0 - self.coeff) + self.prev * self.coeff;
+        self.prev
+    }
+}
+
+/// Allpass filter for the Dattorro plate reverb topology.
+struct DattorroAllpass {
+    buffer: Vec<f32>,
+    index: usize,
+    feedback: f32,
+}
+
+impl DattorroAllpass {
+    fn new(delay_samples: usize, feedback: f32) -> Self {
+        Self {
+            buffer: vec![0.0; delay_samples.max(1)],
+            index: 0,
+            feedback,
+        }
+    }
+
+    fn process(&mut self, input: f32) -> f32 {
+        let delayed = self.buffer[self.index];
+        let output = -input * self.feedback + delayed;
+        self.buffer[self.index] = input + delayed * self.feedback;
+        self.index = (self.index + 1) % self.buffer.len();
+        output
+    }
+}
+
+/// Dattorro plate reverb — smoother, more natural reverb than Schroeder.
+///
+/// Based on Jon Dattorro's "Effect Design Part 1" (JAES, 1997).
+/// Uses a figure-8 tank topology with input diffusion, decay diffusion,
+/// damping, and LFO-modulated delay lines for lush, dense reverb tails.
+pub struct DattorroReverb {
+    // Input section
+    bandwidth_filter: OnePole,
+    input_diffusors: [DattorroAllpass; 4],
+    // Tank (two halves)
+    decay_diffusor_1: DattorroAllpass,
+    delay_1: Vec<f32>,
+    delay_1_idx: usize,
+    delay_1_len: usize,
+    damping_1: OnePole,
+    decay_diffusor_2: DattorroAllpass,
+    delay_2: Vec<f32>,
+    delay_2_idx: usize,
+    delay_2_len: usize,
+    damping_2: OnePole,
+    // Modulation
+    mod_lfo_phase: f32,
+    mod_lfo_rate: f32,
+    mod_excursion: usize,
+    // Parameters
+    decay: f32,
+    wet: f32,
+    dry: f32,
+    // Tank cross-feed state
+    tank_1_feedback: f32,
+    tank_2_feedback: f32,
+    sample_rate: u32,
+}
+
+impl DattorroReverb {
+    /// Create a Dattorro plate reverb.
+    ///
+    /// - `sample_rate`: audio sample rate
+    /// - `mix`: 0.0 = fully dry, 1.0 = fully wet
+    /// - `decay`: 0.0 = short tail, 1.0 = infinite (dangerous). 0.5–0.85 is musical.
+    /// - `damping`: 0.0 = bright, 1.0 = very dark. Controls high-frequency absorption.
+    pub fn new(sample_rate: u32, mix: f32, decay: f32, damping: f32) -> Self {
+        let sr_scale = sample_rate as f64 / 29761.0;
+        let scale = |len: usize| -> usize { ((len as f64) * sr_scale).max(1.0) as usize };
+
+        // Input diffusors (4 allpass filters in series)
+        let input_diffusors = [
+            DattorroAllpass::new(scale(142), 0.75),
+            DattorroAllpass::new(scale(107), 0.75),
+            DattorroAllpass::new(scale(379), 0.625),
+            DattorroAllpass::new(scale(277), 0.625),
+        ];
+
+        // Tank components
+        let decay_diffusor_1 = DattorroAllpass::new(scale(672), 0.70);
+        let delay_1_len = scale(4453);
+        let decay_diffusor_2 = DattorroAllpass::new(scale(1800), 0.50);
+        let delay_2_len = scale(3720);
+
+        let mod_excursion = scale(16);
+
+        Self {
+            bandwidth_filter: OnePole::new(1.0 - 0.9995_f32),
+            input_diffusors,
+            decay_diffusor_1,
+            delay_1: vec![0.0; delay_1_len + mod_excursion + 1],
+            delay_1_idx: 0,
+            delay_1_len,
+            damping_1: OnePole::new(damping.clamp(0.0, 1.0)),
+            decay_diffusor_2,
+            delay_2: vec![0.0; delay_2_len + mod_excursion + 1],
+            delay_2_idx: 0,
+            delay_2_len,
+            damping_2: OnePole::new(damping.clamp(0.0, 1.0)),
+            mod_lfo_phase: 0.0,
+            mod_lfo_rate: 1.0 / sample_rate as f32, // 1 Hz LFO
+            mod_excursion,
+            decay: decay.clamp(0.0, 0.99),
+            wet: mix.clamp(0.0, 1.0),
+            dry: 1.0 - mix.clamp(0.0, 1.0),
+            tank_1_feedback: 0.0,
+            tank_2_feedback: 0.0,
+            sample_rate,
+        }
+    }
+
+    /// Hall preset — spacious plate reverb.
+    pub fn hall(sample_rate: u32) -> Self {
+        Self::new(sample_rate, 0.20, 0.70, 0.45)
+    }
+
+    /// Process a mono buffer in-place, adding plate reverb.
+    pub fn process(&mut self, buffer: &mut [f32]) {
+        let d1_total = self.delay_1.len();
+        let d2_total = self.delay_2.len();
+
+        for sample in buffer.iter_mut() {
+            let input = *sample;
+
+            // 1. Bandwidth filter
+            let mut x = self.bandwidth_filter.process(input);
+
+            // 2. Input diffusion (4 allpass filters in series)
+            for d in &mut self.input_diffusors {
+                x = d.process(x);
+            }
+
+            // 3. Tank: Half 1 (input + feedback from half 2)
+            let t1_in = x + self.tank_2_feedback;
+            let t1_ap = self.decay_diffusor_1.process(t1_in);
+
+            // Write to delay 1
+            self.delay_1[self.delay_1_idx] = t1_ap;
+
+            // Read with LFO modulation (linear interpolation for smooth modulation)
+            let mod_val = (self.mod_lfo_phase * std::f32::consts::TAU).sin();
+            let mod_samples = mod_val * self.mod_excursion as f32;
+            let actual_delay = (self.delay_1_len as f32 - mod_samples).max(1.0);
+            let read_f = (self.delay_1_idx as f32 - actual_delay + d1_total as f32)
+                % d1_total as f32;
+            let read_f = read_f.max(0.0);
+            let idx0 = (read_f as usize) % d1_total;
+            let idx1 = (idx0 + 1) % d1_total;
+            let frac = read_f - read_f.floor();
+            let t1_out = self.delay_1[idx0] * (1.0 - frac) + self.delay_1[idx1] * frac;
+
+            let t1_damped = self.damping_1.process(t1_out);
+            self.tank_1_feedback = t1_damped * self.decay;
+
+            // Tank: Half 2 (input + feedback from half 1)
+            let t2_in = x + self.tank_1_feedback;
+            let t2_ap = self.decay_diffusor_2.process(t2_in);
+
+            // Write to delay 2
+            self.delay_2[self.delay_2_idx] = t2_ap;
+
+            // Read (no modulation for asymmetry)
+            let read_pos = if self.delay_2_idx >= self.delay_2_len {
+                self.delay_2_idx - self.delay_2_len
+            } else {
+                d2_total + self.delay_2_idx - self.delay_2_len
+            };
+            let t2_out = self.delay_2[read_pos % d2_total];
+
+            let t2_damped = self.damping_2.process(t2_out);
+            self.tank_2_feedback = t2_damped * self.decay;
+
+            // 4. Output — sum from both tank halves
+            let wet_out = (t1_out + t2_out) * 0.5;
+
+            // Advance delay write positions
+            self.delay_1_idx = (self.delay_1_idx + 1) % d1_total;
+            self.delay_2_idx = (self.delay_2_idx + 1) % d2_total;
+
+            // Advance LFO
+            self.mod_lfo_phase += self.mod_lfo_rate;
+            if self.mod_lfo_phase >= 1.0 {
+                self.mod_lfo_phase -= 1.0;
+            }
+
+            *sample = input * self.dry + wet_out * self.wet;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,5 +453,25 @@ mod tests {
         for &s in &buffer {
             assert!(s.abs() < 1.0, "saturated signals should be bounded");
         }
+    }
+
+    #[test]
+    fn test_dattorro_reverb_adds_tail() {
+        let mut reverb = DattorroReverb::hall(44100);
+        let mut buffer = vec![0.0f32; 44100];
+        buffer[0] = 1.0;
+        reverb.process(&mut buffer);
+        let late_energy: f32 = buffer[4410..8820].iter().map(|s| s * s).sum();
+        assert!(late_energy > 0.0001, "dattorro should produce a tail");
+    }
+
+    #[test]
+    fn test_dattorro_does_not_explode() {
+        let mut reverb = DattorroReverb::new(44100, 0.5, 0.95, 0.2);
+        let mut buffer = vec![0.0f32; 88200]; // 2 seconds
+        buffer[0] = 1.0;
+        reverb.process(&mut buffer);
+        let max = buffer.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+        assert!(max < 10.0, "reverb should not explode, max={}", max);
     }
 }
