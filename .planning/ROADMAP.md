@@ -248,6 +248,25 @@ Plans:
 Plans:
 - [ ] TBD (promote with /gsd-review-backlog when ready)
 
+### Phase 999.4: Interpret Mode Pitch Accuracy (BACKLOG)
+
+**Goal:** Resolve the speaker→mic pitch detection reliability gap in interpret mode and clarify the architectural roles of each package (haydn, haydn-audio, haydn-performer, haydn-vm, haydn-tuning). Currently the mic capture pipeline works but detected pitches are inaccurate when playing through laptop speakers — room acoustics, harmonics, and speaker quality cause wrong MIDI notes. Need to decide: is interpret mode designed only for real instruments into a mic? Should there be a virtual audio cable / loopback mode? Should there be a direct-feed fallback for testing?
+
+**Context & Notes:**
+- Pipeline proven working: speaker→mic→pitch detection→tuning engine→VM produces operations and output
+- Accuracy is poor with soundfont/complex timbres, slightly better with sine waves, but still unreliable
+- Two runs with identical setup produce completely different VM states (non-deterministic mic capture)
+- Virtual audio cable (e.g., VB-Audio Cable) would give perfect digital loopback for testing
+- Core question: what is each crate's responsibility boundary? Is haydn-performer meant to be a testing harness or a production audio player?
+- May need a `--loopback` mode that routes audio internally without physical speaker/mic
+- The "real" use case (human playing piano into mic) hasn't been tested yet and may work much better
+
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd-review-backlog when ready)
+
 ### Phase 10: Instrument Synthesis Realism
 
 **Goal:** Higher-fidelity instrument synthesis beyond basic SoundFont playback
