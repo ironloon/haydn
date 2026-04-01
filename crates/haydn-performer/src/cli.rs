@@ -32,7 +32,7 @@ pub struct Cli {
     #[arg(long, default_value = "builtin", value_enum)]
     pub synth: SynthType,
 
-    /// Fidelity level (0=sine, 1=ADSR, 2=waveforms, 3=expressive)
+    /// Fidelity level (0=sine, 1=ADSR, 2=waveforms, 3=expressive, 4=realistic, 5=soundfont)
     #[arg(long, default_value_t = 1)]
     pub fidelity: u8,
 

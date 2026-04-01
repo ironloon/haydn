@@ -19,6 +19,17 @@ fn main() -> Result<()> {
         bail!("--volume must be between 0.0 and 1.0 (got {})", args.volume);
     }
 
+    // Validate fidelity range
+    if args.fidelity > 5 {
+        bail!("Fidelity must be 0-5 (got {})", args.fidelity);
+    }
+
+    // Validate fidelity 5 requires --soundfont
+    if args.fidelity == 5 && args.soundfont.is_none() {
+        bail!("--fidelity 5 requires --soundfont <path>. Download a GM SoundFont \
+               (e.g., FluidR3_GM.sf2 or TimGM6mb.sf2) and provide the path.");
+    }
+
     // --test-audio: diagnostic mode that plays test tones through speakers
     if args.test_audio {
         return run_audio_test(args.output_device.as_deref(), args.volume);
@@ -58,6 +69,11 @@ fn main() -> Result<()> {
                 // Leak is fine: synth_name lives for the program's duration
                 Box::leak(format!("built-in ({inst})").into_boxed_str()) as &str
             }
+            4 => {
+                let inst = format!("{:?}", args.instrument).to_lowercase();
+                Box::leak(format!("built-in realistic ({inst})").into_boxed_str()) as &str
+            }
+            5 => "soundfont (SF2)",
             _ => "built-in",
         },
         cli::SynthType::Soundfont => "soundfont (SF2)",
@@ -75,10 +91,17 @@ fn main() -> Result<()> {
 
     match args.synth {
         cli::SynthType::Builtin => {
-            let backend = haydn_performer::synth::builtin::BuiltinSynth::with_instrument(
-                args.fidelity,
-                args.instrument,
-            );
+            let backend = if args.fidelity == 5 {
+                haydn_performer::synth::builtin::BuiltinSynth::with_soundfont(
+                    args.instrument,
+                    args.soundfont.clone().unwrap(), // validated above
+                )
+            } else {
+                haydn_performer::synth::builtin::BuiltinSynth::with_instrument(
+                    args.fidelity,
+                    args.instrument,
+                )
+            };
             play_with_display(
                 &backend,
                 &sequence,
