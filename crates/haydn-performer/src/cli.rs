@@ -91,4 +91,10 @@ pub struct Cli {
     /// Noise gate in dB (more negative = more sensitive, e.g. -60)
     #[arg(long, default_value_t = -55.0)]
     pub noise_gate: f32,
+
+    /// Loopback mode: feed synthesized audio directly into the analysis pipeline
+    /// instead of capturing from a microphone. Cross-platform and zero-latency.
+    /// Requires --interpret.
+    #[arg(long)]
+    pub loopback: bool,
 }

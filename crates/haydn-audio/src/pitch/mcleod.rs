@@ -1,21 +1,46 @@
+use rustfft::{num_complex::Complex, Fft, FftPlanner};
+use std::sync::Arc;
+
 use super::{freq_to_midi, PitchDetector, PitchEstimate};
 
 /// McLeod NSDF pitch detection algorithm (McLeod & Wyvill, 2005).
 ///
 /// Uses the Normalized Square Difference Function for robust fundamental
 /// frequency estimation with better octave accuracy than raw autocorrelation.
+///
+/// The NSDF autocorrelation numerator is computed via FFT (O(N log N)) and the
+/// denominator via prefix sums (O(N)), making this suitable for debug builds.
 pub struct McLeodDetector {
     window_size: usize,
     clarity_threshold: f32,
     nsdf: Vec<f32>,
+    sq_prefix: Vec<f32>,
+    fft_size: usize,
+    fft: Arc<dyn Fft<f32>>,
+    ifft: Arc<dyn Fft<f32>>,
+    fft_buf: Vec<Complex<f32>>,
+    scratch: Vec<Complex<f32>>,
 }
 
 impl McLeodDetector {
     pub fn new(window_size: usize, clarity_threshold: f32) -> Self {
+        let fft_size = (window_size * 2).next_power_of_two();
+        let mut planner = FftPlanner::<f32>::new();
+        let fft = planner.plan_fft_forward(fft_size);
+        let ifft = planner.plan_fft_inverse(fft_size);
+        let scratch_len = fft
+            .get_inplace_scratch_len()
+            .max(ifft.get_inplace_scratch_len());
         Self {
             window_size,
             clarity_threshold,
             nsdf: vec![0.0; window_size],
+            sq_prefix: vec![0.0; window_size + 1],
+            fft_size,
+            fft,
+            ifft,
+            fft_buf: vec![Complex::default(); fft_size],
+            scratch: vec![Complex::default(); scratch_len],
         }
     }
 }
@@ -39,14 +64,42 @@ impl PitchDetector for McLeodDetector {
         let w = self.window_size;
 
         // Compute NSDF: nsdf(τ) = 2·r(τ) / m(τ)
-        // where r(τ) = Σ x[j]·x[j+τ], m(τ) = Σ (x[j]² + x[j+τ]²)
+        //
+        // Numerator 2·r(τ): via FFT-based autocorrelation (O(N log N))
+        //   r(τ) = IFFT(|FFT(x_padded)|²)[τ] / fft_size
+        //   Zero-padding to 2N avoids circular wrap-around.
+        //
+        // Denominator m(τ) = Σ_{j=0}^{w-τ-1} (x[j]² + x[j+τ]²): via prefix sums (O(N))
+        //   m(τ) = sq_prefix[w-τ] + sq_prefix[w] - sq_prefix[τ]
+
+        // Forward FFT: fill with signal, zero-pad to fft_size
+        for (i, c) in self.fft_buf.iter_mut().enumerate() {
+            c.re = if i < w { samples[i] } else { 0.0 };
+            c.im = 0.0;
+        }
+        self.fft.process_with_scratch(&mut self.fft_buf, &mut self.scratch);
+
+        // Power spectrum: |X[k]|²
+        for c in self.fft_buf.iter_mut() {
+            let p = c.norm_sqr();
+            c.re = p;
+            c.im = 0.0;
+        }
+
+        // Inverse FFT → autocorrelation (scaled by fft_size)
+        self.ifft.process_with_scratch(&mut self.fft_buf, &mut self.scratch);
+        let scale = self.fft_size as f32;
+
+        // Prefix sums of squares: sq_prefix[i] = Σ_{j=0}^{i-1} x[j]²
+        self.sq_prefix[0] = 0.0;
+        for i in 0..w {
+            self.sq_prefix[i + 1] = self.sq_prefix[i] + samples[i] * samples[i];
+        }
+        let sq_total = self.sq_prefix[w];
+
         for tau in 0..w {
-            let mut acf = 0.0f32; // autocorrelation r(τ)
-            let mut m = 0.0f32; // energy normalization m(τ)
-            for j in 0..(w - tau) {
-                acf += samples[j] * samples[j + tau];
-                m += samples[j] * samples[j] + samples[j + tau] * samples[j + tau];
-            }
+            let acf = self.fft_buf[tau].re / scale;
+            let m = self.sq_prefix[w - tau] + (sq_total - self.sq_prefix[tau]);
             self.nsdf[tau] = if m > 0.0 { 2.0 * acf / m } else { 0.0 };
         }
 
@@ -209,3 +262,4 @@ mod tests {
         assert_eq!(est.midi_note, 69, "should detect A4 fundamental, not harmonic");
     }
 }
+

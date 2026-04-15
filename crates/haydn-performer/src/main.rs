@@ -1,10 +1,53 @@
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use cpal::traits::{DeviceTrait, HostTrait};
+use ringbuf::traits::Producer;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 mod cli;
+
+/// Wraps a rodio `Source` and taps its mono samples into a loopback ring-buffer producer.
+/// Channel 0 samples are forwarded to the pitch-detection pipeline; all channels pass
+/// through to rodio unmodified.  This is the real loopback path: the VM hears the exact
+/// same PCM data going to the speakers.
+struct LoopbackTap {
+    inner: Box<dyn rodio::Source<Item = f32> + Send>,
+    producer: haydn_audio::HeapProd<f32>,
+    channel_idx: usize,
+    channels: u16,
+    sample_rate: u32,
+}
+
+impl LoopbackTap {
+    fn new(
+        source: Box<dyn rodio::Source<Item = f32> + Send>,
+        producer: haydn_audio::HeapProd<f32>,
+    ) -> Self {
+        let channels = source.channels().max(1);
+        let sample_rate = source.sample_rate();
+        Self { inner: source, producer, channel_idx: 0, channels, sample_rate }
+    }
+}
+
+impl Iterator for LoopbackTap {
+    type Item = f32;
+    fn next(&mut self) -> Option<f32> {
+        let sample = self.inner.next()?;
+        if self.channel_idx == 0 {
+            let _ = self.producer.try_push(sample);
+        }
+        self.channel_idx = (self.channel_idx + 1) % self.channels as usize;
+        Some(sample)
+    }
+}
+
+impl rodio::Source for LoopbackTap {
+    fn current_frame_len(&self) -> Option<usize> { self.inner.current_frame_len() }
+    fn channels(&self) -> u16 { self.channels }
+    fn sample_rate(&self) -> u32 { self.sample_rate }
+    fn total_duration(&self) -> Option<std::time::Duration> { self.inner.total_duration() }
+}
 
 fn main() -> Result<()> {
     let args = cli::Cli::parse();
@@ -96,12 +139,30 @@ fn main() -> Result<()> {
     }
 
     // Build audio config for interpret mode mic capture (lenient defaults for speaker→mic path)
-    let interpret_audio_config = haydn_audio::AudioConfig {
-        confidence_threshold: args.confidence,
-        noise_gate_db: args.noise_gate,
-        onset_threshold_db: 3.0,
-        min_note_ms: 50,
-        ..haydn_audio::AudioConfig::default()
+    let interpret_audio_config = if args.loopback {
+        // Loopback: synthetic audio is clean, so we can be strict.
+        // noise_gate_db at -20 fires ~22ms before each note ends (during the ADSR
+        // piano release tail) — that's enough silence for the pitch-tracker to reset
+        // between consecutive same-pitch notes.  confidence_threshold is clamped
+        // inside start_loopback_capture.
+        haydn_audio::AudioConfig {
+            confidence_threshold: 0.80,
+            noise_gate_db: -20.0,
+            // 4096-sample window gives B3 (~247 Hz) 23 cycles — enough for McLeod
+            // to reliably pick the fundamental over the 3× sub-octave (E2 ghost).
+            window_size: 4096,
+            hop_size: 512,
+            ..haydn_audio::AudioConfig::default()
+        }
+    } else {
+        // Mic: lenient settings to cope with room noise and imprecise pitch
+        haydn_audio::AudioConfig {
+            confidence_threshold: args.confidence,
+            noise_gate_db: args.noise_gate,
+            onset_threshold_db: 3.0,
+            min_note_ms: 50,
+            ..haydn_audio::AudioConfig::default()
+        }
     };
 
     match args.synth {
@@ -129,7 +190,8 @@ fn main() -> Result<()> {
                     args.volume,
                     args.tuning.as_ref().unwrap(),
                     interpret_audio_config.clone(),
-                )?;
+                    args.loopback,
+                )?
             } else {
                 play_with_display(
                     &backend,
@@ -159,6 +221,7 @@ fn main() -> Result<()> {
                     args.volume,
                     args.tuning.as_ref().unwrap(),
                     interpret_audio_config,
+                    args.loopback,
                 )?;
             } else {
                 play_with_display(
@@ -254,6 +317,7 @@ fn play_with_interpret(
     volume: f32,
     tuning_path: &std::path::Path,
     audio_config: haydn_audio::AudioConfig,
+    loopback: bool,
 ) -> Result<()> {
     use haydn_audio::types::AudioMsg;
 
@@ -264,22 +328,30 @@ fn play_with_interpret(
     sink.set_volume(volume);
 
     let source = backend.synthesize(sequence, 44100);
-    sink.append(source);
 
-    // Start mic capture for pitch detection
-    let mic_device = haydn_audio::find_audio_input_device(input_device_name)
-        .map_err(|e| anyhow::anyhow!("Mic capture: {e}"))?;
-    let audio_config = audio_config;
-    let (mic_rx, _mic_stream) = haydn_audio::start_audio_capture(mic_device, audio_config)
-        .map_err(|e| anyhow::anyhow!("Mic capture: {e}"))?;
+    // Set up audio pipeline: loopback (real PCM tap) or mic (hardware capture)
+    let (mic_rx, _audio_stream) = if loopback {
+        // Real loopback: intercept the exact PCM samples going to speakers and
+        // feed them into the pitch-detection pipeline via LoopbackTap.
+        let (rx, producer) = haydn_audio::start_loopback_capture(audio_config)
+            .map_err(|e| anyhow::anyhow!("Loopback capture: {e}"))?;
+        sink.append(LoopbackTap::new(source, producer));
+        (rx, None)
+    } else {
+        sink.append(source);
+        let mic_device = haydn_audio::find_audio_input_device(input_device_name)
+            .map_err(|e| anyhow::anyhow!("Mic capture: {e}"))?;
+        let (rx, stream) = haydn_audio::start_audio_capture(mic_device, audio_config)
+            .map_err(|e| anyhow::anyhow!("Mic capture: {e}"))?;
+        (rx, Some(stream))
+    };
 
     if quiet {
-        // Poll mic for detected notes, feed through VM, log to stderr
+        // Poll for note events, feed through VM, log to stderr.
+        // Break on Disconnected (score-feed thread finished) or when the sink
+        // empties after a timeout (mic-capture path where the channel never closes).
         let mut interpret = interpret;
         loop {
-            if sink.empty() {
-                break;
-            }
             match mic_rx.recv_timeout(std::time::Duration::from_millis(10)) {
                 Ok(AudioMsg::NoteOn { note, .. }) => {
                     let results = interpret.process_note(note);
@@ -288,7 +360,11 @@ fn play_with_interpret(
                     }
                 }
                 Ok(_) => {} // SignalLevel, NoteOff — ignore in quiet mode
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if sink.empty() {
+                        break;
+                    }
+                }
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }

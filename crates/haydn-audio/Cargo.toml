@@ -11,4 +11,5 @@ categories = ["multimedia::audio"]
 [dependencies]
 cpal = "0.15"
 ringbuf = "0.4"
+rustfft = "6"
 thiserror = "2"

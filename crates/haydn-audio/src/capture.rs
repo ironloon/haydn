@@ -116,7 +116,7 @@ pub fn start_audio_capture(
         .play()
         .map_err(|e| AudioError::StreamError(format!("failed to start stream: {e}")))?;
 
-    // Spawn analysis thread
+    // Spawn analysis thread (shared with start_loopback_capture below)
     let window_size = config.window_size;
     let hop_size = config.hop_size;
     let algorithm = config.algorithm.clone();
@@ -168,4 +168,123 @@ pub fn start_audio_capture(
     });
 
     Ok((rx, stream))
+}
+
+/// Start the audio analysis pipeline without a hardware input device (loopback mode).
+///
+/// Returns a receiver for `AudioMsg` events and a ring-buffer producer.
+/// The caller (e.g. `LoopbackTap`) feeds the exact same mono f32 PCM samples going
+/// to the speakers into this producer; the analysis thread pitch-detects them.
+///
+/// Design: no silence-gate buffer-clear.  Consecutive piano ADSR notes produce a
+/// brief near-zero region at each note boundary — zeroing the window and waiting for
+/// it to refill (settle) causes repeated re-silence loops when settle hops land on
+/// another boundary.  Instead we let the 4096-sample window fill organically: the
+/// old-note tail is near-zero and contributes negligibly to the autocorrelation.
+/// Silence detection still emits NoteOff (needed for rests), but does NOT clear the
+/// analysis buffer or introduce any settle delay.
+pub fn start_loopback_capture(
+    config: AudioConfig,
+) -> Result<(mpsc::Receiver<AudioMsg>, ringbuf::HeapProd<f32>), AudioError> {
+    let actual_sample_rate = config.sample_rate;
+    let window_size = config.window_size;
+    let hop_size = config.hop_size;
+    // Require high confidence — synthetic audio is clean.  0.85 filters out the
+    // brief low-confidence frames during ADSR attack transients.
+    let confidence_threshold = config.confidence_threshold.max(0.85);
+    // -20 dB gate is used only to emit NoteOff for rests; it does NOT clear the
+    // analysis buffer (clearing causes settle-loop problems at note boundaries).
+    let noise_gate_db = config.noise_gate_db.max(-20.0);
+
+    // Require this many consecutive hops of the same MIDI note before firing NoteOn.
+    // 8 hops × 11.6 ms/hop ≈ 93 ms.  The 4096-sample window gives low notes ~23 cycles,
+    // which suppresses steady-state McLeod sub-octave errors.  8 stable hops outlasts
+    // the 3–5-hop transient where McLeod detects a sub-harmonic (e.g. G3 = G4/2 or
+    // A4 = A5/2) during the window-fill period when an old note's tail is still present.
+    const STABLE_HOPS: u8 = 8;
+
+    let rb = HeapRb::<f32>::new(16384);
+    let (prod, mut cons) = rb.split();
+
+    let (tx, rx) = mpsc::channel::<AudioMsg>();
+
+    thread::spawn(move || {
+        let mut detector = McLeodDetector::new(window_size, confidence_threshold);
+        let mut analysis_buffer = vec![0.0f32; window_size];
+
+        let mut active_note: Option<u8> = None; // last NoteOn emitted
+        let mut candidate: Option<u8> = None;   // note accumulating stability
+        let mut candidate_count: u8 = 0;
+
+        loop {
+            if cons.occupied_len() < hop_size {
+                // No data yet — wait a short time for the ring to fill.
+                // The cpal hardware callback drives production at the audio-device
+                // rate, so this naturally throttles the analysis to real-time.
+                thread::sleep(Duration::from_millis(1));
+                continue;
+            }
+
+            // Slide window
+            analysis_buffer.copy_within(hop_size.., 0);
+            let fill_start = window_size - hop_size;
+            cons.pop_slice(&mut analysis_buffer[fill_start..]);
+
+            let hop_buf = &analysis_buffer[fill_start..];
+            let rms_db = crate::gate::NoiseGate::rms_db(hop_buf);
+            let rms = (hop_buf.iter().map(|s| s * s).sum::<f32>() / hop_buf.len() as f32)
+                .sqrt();
+
+            if rms_db < noise_gate_db {
+                // --- SILENCE (rest or end of score) ---
+                // Emit NoteOff if needed; reset candidate accumulation.
+                // Do NOT clear the analysis buffer — consecutive piano notes have
+                // a brief near-zero region between them and clearing would trigger
+                // a re-silence loop as each settle hop lands on the next boundary.
+                if active_note.is_some() {
+                    active_note = None;
+                    if tx.send(AudioMsg::NoteOff).is_err() {
+                        return;
+                    }
+                }
+                candidate = None;
+                candidate_count = 0;
+            } else {
+                // --- DETECT ---
+                if let Some(est) = detector.detect(&analysis_buffer, actual_sample_rate) {
+                    if est.confidence >= confidence_threshold {
+                        if candidate == Some(est.midi_note) {
+                            candidate_count = candidate_count.saturating_add(1);
+                        } else {
+                            candidate = Some(est.midi_note);
+                            candidate_count = 1;
+                        }
+
+                        if candidate_count >= STABLE_HOPS && active_note != candidate {
+                            if active_note.is_some() {
+                                if tx.send(AudioMsg::NoteOff).is_err() {
+                                    return;
+                                }
+                            }
+                            if tx.send(AudioMsg::NoteOn {
+                                note: est.midi_note,
+                                confidence: est.confidence,
+                            })
+                            .is_err()
+                            {
+                                return;
+                            }
+                            active_note = candidate;
+                        }
+                    }
+                }
+            }
+
+            if tx.send(AudioMsg::SignalLevel(rms)).is_err() {
+                return;
+            }
+        }
+    });
+
+    Ok((rx, prod))
 }
